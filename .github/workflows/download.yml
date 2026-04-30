@@ -13,19 +13,24 @@ on:
 jobs:
   download:
     runs-on: ubuntu-latest
-    outputs:
-      download-url: ${{ steps.upload.outputs.url }}
     
     steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
     
     - name: Download video
       run: |
-        yt-dlp "${{ github.event.client_payload.url || github.event.inputs.url }}" -f "best[height<=720]" --merge-output-format mp4 -o "video.mp4"
+        yt-dlp "${{ github.event.client_payload.url || github.event.inputs.url }}" \
+          -f "best[height<=720]" \
+          --merge-output-format mp4 \
+          --cookies cookies.txt \
+          --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+          -o "video.mp4"
     
     - name: Upload artifact
-      id: upload
       uses: actions/upload-artifact@v4
       with:
         name: video
