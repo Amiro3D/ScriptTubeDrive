@@ -8,7 +8,6 @@ on:
       url:
         description: 'YouTube URL'
         required: true
-        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 
 jobs:
   download:
@@ -39,7 +38,8 @@ jobs:
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
-    - name: Download video with proper filename
+    - name: Download video
+      id: download
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
@@ -50,13 +50,38 @@ jobs:
           --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
           -o "${SAFE_TITLE}.mp4"
+        
+        # Get file size in bytes
+        FILE_SIZE=$(stat -c%s "${SAFE_TITLE}.mp4")
+        echo "file_size=${FILE_SIZE}" >> $GITHUB_OUTPUT
+        
+        # Split into 45 MB parts (safe margin under 50MB limit)
+        # 45 MB = 47185920 bytes
+        MAX_SIZE=47185920
+        if [ $FILE_SIZE -gt $MAX_SIZE ]; then
+          echo "needs_split=true" >> $GITHUB_OUTPUT
+          # Split into 45 MB parts
+          split -b 45M "${SAFE_TITLE}.mp4" "${SAFE_TITLE}.part."
+          # Rename parts to have proper extensions for easier processing
+          PART_NUM=1
+          for part in ${SAFE_TITLE}.part.*; do
+            mv "$part" "${SAFE_TITLE}.part${PART_NUM}.zip"
+            PART_NUM=$((PART_NUM + 1))
+          done
+          PART_COUNT=$((PART_NUM - 1))
+          echo "part_count=${PART_COUNT}" >> $GITHUB_OUTPUT
+        else
+          echo "needs_split=false" >> $GITHUB_OUTPUT
+        fi
 
-    - name: Create Release with Run ID and Request ID
+    - name: Create Release with parts
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
-        files: "*.mp4"
+        files: |
+          *.mp4
+          *.part*.zip
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
