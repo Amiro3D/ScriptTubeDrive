@@ -21,18 +21,25 @@ jobs:
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
     
-    - name: Download video
+    - name: Get video title
+      id: title
       run: |
+        TITLE=$(yt-dlp --get-title "${{ github.event.client_payload.url || github.event.inputs.url }}" --cookies cookies.txt 2>/dev/null || echo "video")
+        echo "name=${TITLE}" >> $GITHUB_OUTPUT
+    
+    - name: Download video with title
+      run: |
+        SAFE_TITLE=$(echo "${{ steps.title.outputs.name }}" | sed 's/[^a-zA-Z0-9]/_/g')
         yt-dlp "${{ github.event.client_payload.url || github.event.inputs.url }}" \
           -f "best[height<=720]" \
           --merge-output-format mp4 \
           --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-          -o "video.mp4"
+          -o "${SAFE_TITLE}.mp4"
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: video
-        path: video.mp4
+        path: "*.mp4"
         retention-days: 1
