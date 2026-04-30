@@ -14,48 +14,42 @@ jobs:
   download:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-    
+      contents: write  # Needed to create releases
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-    
+
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
-    
-    - name: Check if cookies are fresh
-      run: |
-        if [ -f "cookies.txt" ]; then
-          echo "✅ cookies.txt found"
-          # Validate cookie by trying to get a video title
-          yt-dlp --cookies cookies.txt --get-title "https://www.youtube.com/watch?v=dQw4w9WgXcQ" || echo "⚠️ Cookies may be expired"
-        else
-          echo "❌ cookies.txt not found"
-          exit 1
-        fi
-    
+
     - name: Download video
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         
+        # The fix: forcing the 'ios' client bypasses the PO token requirement
         yt-dlp "$URL" \
           -f "best[height<=720]" \
           --merge-output-format mp4 \
           --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+          --extractor-args "youtube:player_client=ios" \
           -o "video.mp4"
-    
+
     - name: Get video title
       id: title
       run: |
         TITLE=$(yt-dlp --get-title "${{ github.event.client_payload.url || github.event.inputs.url }}" --cookies cookies.txt 2>/dev/null || echo "YouTube Video")
-        echo "name=${TITLE}" >> $GITHUB_OUTPUT
-    
+        # Sanitize title for filename
+        SAFE_TITLE=$(echo "$TITLE" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c1-100)
+        echo "name=${SAFE_TITLE}" >> $GITHUB_OUTPUT
+        echo "raw=${TITLE}" >> $GITHUB_OUTPUT
+
     - name: Create Release
       id: create_release
       uses: softprops/action-gh-release@v1
       with:
-        name: "Video: ${{ steps.title.outputs.name }}"
+        name: "Video: ${{ steps.title.outputs.raw }}"
         tag_name: "video-${{ github.run_id }}"
         files: video.mp4
         generate_release_notes: false
