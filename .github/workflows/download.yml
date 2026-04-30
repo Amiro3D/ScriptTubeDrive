@@ -28,13 +28,9 @@ jobs:
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         
-        # Get the actual video title
         RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
-        
-        # Sanitize title: replace invalid characters with underscores
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-100)
         
-        # If title is empty or became empty after sanitizing, use timestamp
         if [ -z "$SAFE_TITLE" ]; then
           SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
         fi
@@ -47,20 +43,20 @@ jobs:
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
         
-        # REMOVED the --extractor-args line - let yt-dlp choose the client automatically
         yt-dlp "$URL" \
           -f "best[height<=720]" \
           --merge-output-format mp4 \
           --cookies cookies.txt \
-          --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+          --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
           -o "${SAFE_TITLE}.mp4"
 
-    - name: Create Release with proper filename
+    - name: Create Release with Run ID
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
-        tag_name: "video-${{ github.run_id }}"
-        files: "${{ steps.title.outputs.safe_title }}.mp4"
+        # IMPORTANT: Include the Run ID in the tag name
+        tag_name: "run-${{ github.run_id }}-${{ steps.title.outputs.safe_title }}"
+        files: "*.mp4"
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
