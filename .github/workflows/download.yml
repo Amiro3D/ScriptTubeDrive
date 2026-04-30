@@ -24,18 +24,40 @@ jobs:
     - name: Get video title
       id: title
       run: |
-        TITLE=$(yt-dlp --get-title "${{ github.event.client_payload.url || github.event.inputs.url }}" --cookies cookies.txt 2>/dev/null || echo "video")
-        echo "name=${TITLE}" >> $GITHUB_OUTPUT
+        # Check if cookies.txt exists
+        if [ -f "cookies.txt" ]; then
+          TITLE=$(yt-dlp --get-title "${{ github.event.client_payload.url || github.event.inputs.url }}" --cookies cookies.txt 2>/dev/null || echo "video")
+        else
+          TITLE=$(yt-dlp --get-title "${{ github.event.client_payload.url || github.event.inputs.url }}" 2>/dev/null || echo "video")
+        fi
+        # Clean title for filename
+        SAFE_TITLE=$(echo "$TITLE" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c1-100)
+        echo "name=${SAFE_TITLE}" >> $GITHUB_OUTPUT
+        echo "raw=${TITLE}" >> $GITHUB_OUTPUT
     
-    - name: Download video with title
+    - name: Download video
       run: |
-        SAFE_TITLE=$(echo "${{ steps.title.outputs.name }}" | sed 's/[^a-zA-Z0-9]/_/g')
-        yt-dlp "${{ github.event.client_payload.url || github.event.inputs.url }}" \
-          -f "best[height<=720]" \
-          --merge-output-format mp4 \
-          --cookies cookies.txt \
-          --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-          -o "${SAFE_TITLE}.mp4"
+        URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
+        SAFE_TITLE="${{ steps.title.outputs.name }}"
+        
+        # Download with cookies if available
+        if [ -f "cookies.txt" ]; then
+          yt-dlp "$URL" \
+            -f "best[height<=720]" \
+            --merge-output-format mp4 \
+            --cookies cookies.txt \
+            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -o "${SAFE_TITLE}.mp4"
+        else
+          yt-dlp "$URL" \
+            -f "best[height<=720]" \
+            --merge-output-format mp4 \
+            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -o "${SAFE_TITLE}.mp4"
+        fi
+        
+        # List downloaded files for debugging
+        ls -la *.mp4
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
