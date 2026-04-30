@@ -14,7 +14,7 @@ jobs:
   download:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Needed to create releases
+      contents: write
 
     steps:
     - name: Checkout repository
@@ -23,35 +23,44 @@ jobs:
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
 
-    - name: Download video
+    - name: Get video title and sanitize it
+      id: title
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         
-        # The fix: forcing the 'ios' client bypasses the PO token requirement
+        # Get the actual video title
+        RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
+        
+        # Sanitize title: replace invalid characters with underscores
+        SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-100)
+        
+        # If title is empty or became empty after sanitizing, use timestamp
+        if [ -z "$SAFE_TITLE" ]; then
+          SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
+        fi
+        
+        echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
+        echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
+
+    - name: Download video with proper filename
+      run: |
+        URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
+        SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
+        
         yt-dlp "$URL" \
           -f "best[height<=720]" \
           --merge-output-format mp4 \
           --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-          --extractor-args "youtube:player_client=android,android_embedded"
-          -o "video.mp4"
+          --extractor-args "youtube:player_client=android,android_embedded" \
+          -o "${SAFE_TITLE}.mp4"
 
-    - name: Get video title
-      id: title
-      run: |
-        TITLE=$(yt-dlp --get-title "${{ github.event.client_payload.url || github.event.inputs.url }}" --cookies cookies.txt 2>/dev/null || echo "YouTube Video")
-        # Sanitize title for filename
-        SAFE_TITLE=$(echo "$TITLE" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c1-100)
-        echo "name=${SAFE_TITLE}" >> $GITHUB_OUTPUT
-        echo "raw=${TITLE}" >> $GITHUB_OUTPUT
-
-    - name: Create Release
-      id: create_release
+    - name: Create Release with proper filename
       uses: softprops/action-gh-release@v1
       with:
-        name: "Video: ${{ steps.title.outputs.raw }}"
+        name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "video-${{ github.run_id }}"
-        files: video.mp4
+        files: "${{ steps.title.outputs.safe_title }}.mp4"
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
