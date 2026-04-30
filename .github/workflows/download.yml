@@ -1,33 +1,33 @@
-name: YouTube to Google Drive
+name: YouTube Downloader API
 
 on:
+  repository_dispatch:
+    types: [download]
   workflow_dispatch:
+    inputs:
+      url:
+        description: 'YouTube URL'
+        required: true
+        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 
 jobs:
   download:
     runs-on: ubuntu-latest
+    outputs:
+      download-url: ${{ steps.upload.outputs.url }}
     
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
     
-    - name: Create video links
+    - name: Download video
       run: |
-        cat > links.txt << 'EOF'
-        https://www.youtube.com/watch?v=dQw4w9WgXcQ
-        EOF
+        yt-dlp "${{ github.event.client_payload.url || github.event.inputs.url }}" -f "best[height<=720]" --merge-output-format mp4 -o "video.mp4"
     
-    - name: Download videos
-      run: |
-        yt-dlp --batch-file links.txt -f "best[height<=720]" --merge-output-format mp4 -o "%(title)s.%(ext)s"
-    
-    - name: Upload to Google Drive
-      uses: Jumbo810/Upload_Github_Artifacts_TO_GDrive@v2.3.3
+    - name: Upload artifact
+      id: upload
+      uses: actions/upload-artifact@v4
       with:
-        target: "*.mp4"
-        credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
-        parent_folder_id: ${{ secrets.FOLDER_ID }}
-        override: true
+        name: video
+        path: video.mp4
+        retention-days: 1
