@@ -37,6 +37,7 @@ jobs:
         
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
+        echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
     - name: Download video with proper filename
       run: |
@@ -50,12 +51,11 @@ jobs:
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
           -o "${SAFE_TITLE}.mp4"
 
-    - name: Create Release with Run ID
+    - name: Create Release with Run ID and Request ID
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
-        # IMPORTANT: Include the Run ID in the tag name
-        tag_name: "run-${{ github.run_id }}-${{ steps.title.outputs.safe_title }}"
+        tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
         files: "*.mp4"
         generate_release_notes: false
       env:
