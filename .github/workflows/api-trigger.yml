@@ -1,0 +1,27 @@
+name: API YouTube Downloader
+
+on:
+  repository_dispatch:
+    types: [download-video]
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Setup yt-dlp
+      uses: AnimMouse/setup-yt-dlp@v3
+    
+    - name: Download video
+      run: |
+        yt-dlp "${{ github.event.client_payload.url }}" -f "best[height<=720]" --merge-output-format mp4 -o "video.mp4"
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: video
+        path: video.mp4
+        retention-days: 1
