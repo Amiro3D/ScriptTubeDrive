@@ -42,7 +42,7 @@ jobs:
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
-    - name: Download video with unique timestamp to avoid conflicts
+    - name: Download video with unique timestamp
       id: download
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
@@ -54,28 +54,24 @@ jobs:
           -o "$FINAL_NAME" "$URL"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
-    - name: Upload to Google Drive using OAuth
-      uses: adityak74/google-drive-upload-git-action@main
-      id: upload
+    - name: Setup Python
+      uses: actions/setup-python@v5
       with:
-        credentials: '{"installed":{"client_id":"${{ secrets.GDRIVE_CLIENT_ID }}","client_secret":"${{ secrets.GDRIVE_CLIENT_SECRET }}"}}'
-        refreshToken: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-        filename: ${{ steps.download.outputs.video_file }}
-        folderId: ${{ secrets.FOLDER_ID }}
-        overwrite: false
+        python-version: '3.10'
 
-    - name: Get File ID from action output (action prints it)
-      id: get_link
+    - name: Install Google libraries
+      run: pip install google-api-python-client google-auth-oauthlib
+
+    - name: Upload to Google Drive and get link
+      id: upload
       run: |
-        # The action does not output a variable directly, but it prints the file ID in its logs.
-        # We'll extract it using a regex on the logs (a bit hacky but reliable).
-        # As an alternative, we can use a Python script to list the folder (using the same OAuth credentials) – simpler.
-        pip install google-api-python-client google-auth-oauthlib
         python << 'EOF'
         import os
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+        import time
 
         client_id = "${{ secrets.GDRIVE_CLIENT_ID }}"
         client_secret = "${{ secrets.GDRIVE_CLIENT_SECRET }}"
@@ -94,20 +90,19 @@ jobs:
         creds.refresh(Request())
         service = build("drive", "v3", credentials=creds)
 
-        # Search for the file in the folder
-        query = f"name='{filename}' and '{folder_id}' in parents and trashed=false"
-        results = service.files().list(q=query, fields="files(id, name)").execute()
-        files = results.get("files", [])
-        if files:
-            file_id = files[0]["id"]
-            link = f"https://drive.google.com/file/d/{file_id}/view"
-            print(f"Drive link: {link}")
-            # Write to GitHub output
-            with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-                out.write(f"drive_url={link}\n")
-        else:
-            print("File not found after upload")
-            exit(1)
+        # Upload file
+        media = MediaFileUpload(filename, mimetype="video/mp4", resumable=True)
+        file_metadata = {"name": os.path.basename(filename), "parents": [folder_id]}
+        file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+        file_id = file.get("id")
+
+        # Make it publicly readable (optional)
+        service.permissions().create(fileId=file_id, body={"type": "anyone", "role": "reader"}).execute()
+
+        link = f"https://drive.google.com/file/d/{file_id}/view"
+        print(f"Drive link: {link}")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+            out.write(f"drive_url={link}\n")
         EOF
 
     - name: Create Release with Drive link
@@ -116,7 +111,7 @@ jobs:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
         body: |
-          Drive file URL: ${{ steps.get_link.outputs.drive_url }}
+          Drive file URL: ${{ steps.upload.outputs.drive_url }}
           File name: ${{ steps.download.outputs.video_file }}
         generate_release_notes: false
       env:
