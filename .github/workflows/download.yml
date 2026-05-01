@@ -8,6 +8,7 @@ on:
       url:
         description: 'YouTube URL'
         required: true
+        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 
 jobs:
   download:
@@ -21,9 +22,6 @@ jobs:
 
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
-
-    - name: Install zip
-      run: sudo apt-get install -y zip
 
     - name: Get video title and sanitize it
       id: title
@@ -41,7 +39,7 @@ jobs:
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
-    - name: Download video
+    - name: Download video with proper filename
       id: download
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
@@ -54,47 +52,36 @@ jobs:
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
           -o "${SAFE_TITLE}.mp4"
         
-        # Get file size in bytes
-        FILE_SIZE=$(stat -c%s "${SAFE_TITLE}.mp4")
-        echo "file_size=${FILE_SIZE}" >> $GITHUB_OUTPUT
-        
-        # 40 MB = 41943040 bytes
-        MAX_SIZE=41943040
-        
-        if [ $FILE_SIZE -gt $MAX_SIZE ]; then
-          echo "needs_split=true" >> $GITHUB_OUTPUT
-          
-          # Split into 40MB parts
-          split -b $MAX_SIZE "${SAFE_TITLE}.mp4" "${SAFE_TITLE}.part."
-          
-          # Zip each part individually
-          PART_NUM=1
-          for part in ${SAFE_TITLE}.part.*; do
-            zip "part${PART_NUM}.zip" "$part"
-            rm "$part"
-            PART_NUM=$((PART_NUM + 1))
-          done
-          
-          PART_COUNT=$((PART_NUM - 1))
-          echo "part_count=${PART_COUNT}" >> $GITHUB_OUTPUT
-          
-          # Remove original file
-          rm "${SAFE_TITLE}.mp4"
-        else
-          echo "needs_split=false" >> $GITHUB_OUTPUT
-        fi
+        echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
 
-    - name: List files for debugging
-      run: ls -la
+    - name: Upload video to Google Drive
+      id: upload
+      uses: samuelint/google-drive-upload@v1.1.3
+      with:
+        folder_id: ${{ secrets.FOLDER_ID }}
+        service_account: ${{ secrets.GDRIVE_CREDENTIALS }}
+        source_path: ${{ steps.download.outputs.video_file }}
+        upload_cutoff: 10G
 
-    - name: Create Release
+    - name: Create Release with Drive file info
+      if: always()
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
         files: |
-          *.zip
-          *.mp4
+          *.txt
         generate_release_notes: false
+        body: |
+          Drive file URL: ${{ steps.upload.outputs.file_url }}
+          File name: ${{ steps.download.outputs.video_file }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Delete release (cleanup)
+      if: always() && steps.upload.outcome == 'success'
+      uses: dev-drprasad/delete-tag-and-release@v1.1
+      with:
+        tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
+        delete_release: true
+        github_token: ${{ secrets.GITHUB_TOKEN }}
