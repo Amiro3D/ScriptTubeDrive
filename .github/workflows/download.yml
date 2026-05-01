@@ -57,7 +57,7 @@ jobs:
         curl https://rclone.org/install.sh | sudo bash
         sudo apt-get update && sudo apt-get install -y jq
 
-    - name: Configure rclone using OAuth (refresh token)
+    - name: Configure rclone (non‑interactive, using refresh token)
       run: |
         mkdir -p ~/.config/rclone
         cat <<EOF > ~/.config/rclone/rclone.conf
@@ -71,7 +71,7 @@ jobs:
         use_refresh_token = true
         EOF
 
-    - name: Upload to Google Drive and retrieve link
+    - name: Upload to Google Drive and capture link
       id: upload
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
@@ -81,6 +81,7 @@ jobs:
         if [ -n "$FILE_ID" ]; then
           LINK="https://drive.google.com/file/d/${FILE_ID}/view"
           echo "Drive link: ${LINK}"
+          # 🔥 THIS IS THE IMPORTANT PART: Set the output variable correctly
           echo "drive_url=${LINK}" >> $GITHUB_OUTPUT
         else
           echo "ERROR: Could not retrieve Drive link"
@@ -98,3 +99,11 @@ jobs:
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Delete release (cleanup) after successful upload
+      if: always() && steps.upload.outcome == 'success'
+      uses: dev-drprasad/delete-tag-and-release@v1.1
+      with:
+        tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
+        delete_release: true
+        github_token: ${{ secrets.GITHUB_TOKEN }}
