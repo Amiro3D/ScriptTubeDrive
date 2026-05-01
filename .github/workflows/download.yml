@@ -8,7 +8,6 @@ on:
       url:
         description: 'YouTube URL'
         required: true
-        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 
 jobs:
   download:
@@ -23,38 +22,37 @@ jobs:
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
 
+    - name: Check cookies
+      run: |
+        if [ ! -f cookies.txt ]; then
+          echo "cookies.txt not found! Please add it to the repository."
+          exit 1
+        fi
+
     - name: Get video title and sanitize it
       id: title
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
-        
         RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-100)
-        
         if [ -z "$SAFE_TITLE" ]; then
           SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
         fi
-        
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
-    - name: Download video with proper filename
+    - name: Download video
       id: download
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
-        
-        yt-dlp "$URL" \
-          -f "best[height<=720]" \
-          --merge-output-format mp4 \
-          --cookies cookies.txt \
+        yt-dlp -f "best[height<=720]" --merge-output-format mp4 --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-          -o "${SAFE_TITLE}.mp4"
-        
+          -o "${SAFE_TITLE}.mp4" "$URL"
         echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
 
-    - name: Upload to Google Drive (Direct, no splitting)
+    - name: Upload to Google Drive
       id: upload
       uses: Jumbo810/Upload_Github_Artifacts_TO_GDrive@v2.3.3
       with:
@@ -63,7 +61,7 @@ jobs:
         parent_folder_id: ${{ secrets.FOLDER_ID }}
         override: true
 
-    - name: Create Release with Drive file info
+    - name: Create Release with Drive link
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
@@ -75,7 +73,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Delete release (cleanup) after successful upload
+    - name: Delete release (cleanup)
       if: always() && steps.upload.outcome == 'success'
       uses: dev-drprasad/delete-tag-and-release@v1.1
       with:
