@@ -54,15 +54,15 @@ jobs:
 
     - name: Upload to Google Drive (OAuth)
       id: upload
-      uses: samuelint/google-drive-upload@v1.1.3
+      uses: maxkomarychev/upload-to-google-drive@v2.1.1
       with:
         folder_id: ${{ secrets.FOLDER_ID }}
         client_id: ${{ secrets.GDRIVE_CLIENT_ID }}
         client_secret: ${{ secrets.GDRIVE_CLIENT_SECRET }}
         refresh_token: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-        source_path: ${{ steps.download.outputs.video_file }}
-        upload_cutoff: 10G
-        drive_use_service_account: false
+        file_path: ${{ steps.download.outputs.video_file }}
+        name: "${{ steps.title.outputs.raw_title }}.mp4"
+        content_type: video/mp4
 
     - name: Create Release with Drive link
       uses: softprops/action-gh-release@v1
