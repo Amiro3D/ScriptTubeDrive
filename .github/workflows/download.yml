@@ -8,6 +8,7 @@ on:
       url:
         description: 'YouTube URL'
         required: true
+        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 
 jobs:
   download:
@@ -22,83 +23,40 @@ jobs:
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
 
-    - name: Check cookies
-      run: |
-        if [ ! -f cookies.txt ]; then
-          echo "cookies.txt not found! Please add it to the repository."
-          exit 1
-        fi
-
     - name: Get video title and sanitize it
       id: title
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
+        
         RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-100)
+        
         if [ -z "$SAFE_TITLE" ]; then
           SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
         fi
+        
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
-    - name: Download video
-      id: download
+    - name: Download video with proper filename
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
-        yt-dlp -f "best[height<=720]" --merge-output-format mp4 --cookies cookies.txt \
+        
+        yt-dlp "$URL" \
+          -f "best[height<=720]" \
+          --merge-output-format mp4 \
+          --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-          -o "${SAFE_TITLE}.mp4" "$URL"
-        echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
+          -o "${SAFE_TITLE}.mp4"
 
-    - name: Install rclone and jq
-      run: |
-        curl https://rclone.org/install.sh | sudo bash
-        sudo apt-get update && sudo apt-get install -y jq
-
-    - name: Configure rclone with OAuth (hardcoded latest credentials)
-      run: |
-        mkdir -p ~/.config/rclone
-        cat <<EOF > ~/.config/rclone/rclone.conf
-        [gdrive]
-        type = drive
-        client_id = 298932516202-h6i6ueumud8gg85uon21sss82kkk1pr2.apps.googleusercontent.com
-        client_secret = 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
-        refresh_token = 1//04FRvDaAcBhO3CgYIARAAGAQSNwF-L9IrQ_g9F_oOVz1EQKhXu4f-TWnpdH24ABxqsOMkQyFS1bw294upMm3JRpI3ynbsO9KupC4
-        scope = drive
-        use_refresh_token = true
-        EOF
-
-    - name: Upload to Google Drive and capture link
-      id: upload
-      run: |
-        FILE="${{ steps.download.outputs.video_file }}"
-        # Upload to root
-        rclone copy "$FILE" "gdrive:" --verbose
-        sleep 3
-        # Get file ID from root
-        FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
-        if [ -n "$FILE_ID" ]; then
-          # Move file to target folder
-          TARGET_FOLDER="1BL1p3Q-6OL50GzVbC0K_n7XwF7gAuU3Z"
-          rclone moveto "gdrive:$FILE" "gdrive:${TARGET_FOLDER}/$FILE" --verbose
-          LINK="https://drive.google.com/file/d/${FILE_ID}/view"
-          echo "Drive link: ${LINK}"
-          echo "drive_url=${LINK}" >> $GITHUB_OUTPUT
-        else
-          echo "ERROR: Could not retrieve Drive link"
-          exit 1
-        fi
-
-    - name: Create Release with Drive link
+    - name: Create Release with Run ID and Request ID
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
-        body: |
-          Drive file URL: ${{ steps.upload.outputs.drive_url }}
-          File name: ${{ steps.download.outputs.video_file }}
+        files: "*.mp4"
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
