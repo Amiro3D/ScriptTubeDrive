@@ -55,17 +55,13 @@ jobs:
     - name: Install rclone
       run: curl https://rclone.org/install.sh | sudo bash
 
-    - name: Configure rclone with OAuth
+    - name: Configure rclone with OAuth (using refresh token)
       run: |
-        mkdir -p ~/.config/rclone
-        cat <<EOF > ~/.config/rclone/rclone.conf
-        [gdrive]
-        type = drive
-        scope = drive
-        token = {"access_token":"","refresh_token":"${{ secrets.GDRIVE_REFRESH_TOKEN }}","expiry":"2020-01-01T00:00:00Z"}
-        client_id = ${{ secrets.GDRIVE_CLIENT_ID }}
-        client_secret = ${{ secrets.GDRIVE_CLIENT_SECRET }}
-        EOF
+        rclone config create gdrive drive \
+          client_id ${{ secrets.GDRIVE_CLIENT_ID }} \
+          client_secret ${{ secrets.GDRIVE_CLIENT_SECRET }} \
+          refresh_token ${{ secrets.GDRIVE_REFRESH_TOKEN }} \
+          scope drive
 
     - name: Upload to Google Drive
       id: upload
@@ -77,12 +73,12 @@ jobs:
         else
           rclone copy "$FILE" "gdrive:${FOLDER_ID}" --verbose
         fi
-        # Get the file ID from rclone
+        # Retrieve the file ID from rclone (list the remote with JSON output)
         FILE_ID=$(rclone lsf "gdrive:" --files-only --format "p" | grep "$FILE" | head -1 || echo "")
         if [ -n "$FILE_ID" ]; then
           echo "file_url=https://drive.google.com/file/d/${FILE_ID}/view" >> $GITHUB_OUTPUT
         else
-          # Fallback: try to find the file by name (less reliable but works)
+          # Fallback: try to find the file by name
           FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
           if [ -n "$FILE_ID" ]; then
             echo "file_url=https://drive.google.com/file/d/${FILE_ID}/view" >> $GITHUB_OUTPUT
