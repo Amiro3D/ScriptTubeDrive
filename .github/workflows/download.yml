@@ -22,9 +22,13 @@ jobs:
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
 
-    - name: Check cookies file
+    # Ensure cookies.txt exists
+    - name: Check cookies
       run: |
-        if [ -f cookies.txt ]; then echo "cookies.txt found"; else echo "cookies.txt not found!"; exit 1; fi
+        if [ ! -f cookies.txt ]; then
+          echo "cookies.txt not found! Please add it to the repository."
+          exit 1
+        fi
 
     - name: Get video title and sanitize it
       id: title
@@ -32,7 +36,9 @@ jobs:
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-100)
-        [ -z "$SAFE_TITLE" ] && SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
+        if [ -z "$SAFE_TITLE" ]; then
+          SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
+        fi
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
@@ -47,7 +53,8 @@ jobs:
           -o "${SAFE_TITLE}.mp4" "$URL"
         echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
 
-    - name: Encode service account JSON to base64
+    # Convert the raw JSON secret to base64 (required by the upload action)
+    - name: Encode service account to base64
       id: encode
       run: |
         echo "SERVICE_ACCOUNT_BASE64=$(echo '${{ secrets.GDRIVE_CREDENTIALS }}' | base64 -w 0)" >> $GITHUB_OUTPUT
