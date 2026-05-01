@@ -52,40 +52,59 @@ jobs:
           -o "${SAFE_TITLE}.mp4" "$URL"
         echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
 
-    - name: Install rclone and jq
-      run: |
-        curl https://rclone.org/install.sh | sudo bash
-        sudo apt-get update && sudo apt-get install -y jq
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-    - name: Configure rclone with your new Web app OAuth credentials
-      run: |
-        mkdir -p ~/.config/rclone
-        cat <<EOF > ~/.config/rclone/rclone.conf
-        [gdrive]
-        type = drive
-        client_id = YOUR_WEB_APP_CLIENT_ID
-        client_secret = YOUR_WEB_APP_CLIENT_SECRET
-        refresh_token = YOUR_REFRESH_TOKEN
-        scope = drive
-        use_refresh_token = true
-        EOF
+    - name: Install Google API client
+      run: pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
-    - name: Upload to Google Drive and capture link
+    - name: Upload to Google Drive using Python (hardcoded tokens)
       id: upload
       run: |
-        FILE="${{ steps.download.outputs.video_file }}"
-        # Upload to the root of your Drive (no folder ID needed)
-        rclone copy "$FILE" "gdrive:" --verbose
-        sleep 3
-        FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
-        if [ -n "$FILE_ID" ]; then
-          LINK="https://drive.google.com/file/d/${FILE_ID}/view"
-          echo "Drive link: ${LINK}"
-          echo "drive_url=${LINK}" >> $GITHUB_OUTPUT
-        else
-          echo "ERROR: Could not retrieve Drive link"
-          exit 1
-        fi
+        python << 'EOF'
+        import os
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+
+        filename = "${{ steps.download.outputs.video_file }}"
+        folder_id = "1BL1p3Q-6OL50GzVbC0K_n7XwF7gAuU3Z"
+        client_id = "298932516202-s04jq03rqnosl8b6andvjvegqtj53ofp.apps.googleusercontent.com"
+        client_secret = "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"
+        refresh_token = "1//04B0eBqlRgMLfCgYIARAAGAQSNwF-L9IrmQwX35CbceqN7KSqF1FlHhEeECHyHN8nnfhJHd6-42__K84Mg_FWK-OpwbHBBAZ_faQ"
+
+        # Build credentials
+        creds = Credentials(
+            None,
+            refresh_token=refresh_token,
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        # Refresh to get an access token
+        creds.refresh(Request())
+        
+        service = build('drive', 'v3', credentials=creds)
+        
+        # Upload file
+        media = MediaFileUpload(filename, mimetype='video/mp4', resumable=True)
+        file_metadata = {'name': os.path.basename(filename), 'parents': [folder_id]}
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        file_id = file.get('id')
+        
+        # Make it publicly readable (so anyone can view)
+        service.permissions().create(fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute()
+        
+        link = f"https://drive.google.com/file/d/{file_id}/view"
+        print(f"Drive link: {link}")
+        # Write output for GitHub Actions
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+            out.write(f"drive_url={link}\n")
+        EOF
 
     - name: Create Release with Drive link
       uses: softprops/action-gh-release@v1
