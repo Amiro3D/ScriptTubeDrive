@@ -34,7 +34,7 @@ jobs:
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
-        SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-80)
+        SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-100)
         if [ -z "$SAFE_TITLE" ]; then
           SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
         fi
@@ -47,22 +47,45 @@ jobs:
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
-        # Add timestamp to make filename unique
-        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-        FINAL_NAME="${SAFE_TITLE}_${TIMESTAMP}.mp4"
         yt-dlp -f "best[height<=720]" --merge-output-format mp4 --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-          -o "$FINAL_NAME" "$URL"
-        echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          -o "${SAFE_TITLE}.mp4" "$URL"
+        echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
 
-    - name: Upload to Google Drive (no override)
+    - name: Install rclone and jq
+      run: |
+        curl https://rclone.org/install.sh | sudo bash
+        sudo apt-get update && sudo apt-get install -y jq
+
+    - name: Configure rclone using OAuth (refresh token)
+      run: |
+        mkdir -p ~/.config/rclone
+        cat <<EOF > ~/.config/rclone/rclone.conf
+        [gdrive]
+        type = drive
+        client_id = ${{ secrets.GDRIVE_CLIENT_ID }}
+        client_secret = ${{ secrets.GDRIVE_CLIENT_SECRET }}
+        token = {"access_token":"ya29.a0AQvPyINGKY0df5N7J_jWbDwFuSF-O507uuxy_lOmrJGwNd9wWsvbOUqVTIuSx5DbAwv4pu3zmgsWhNYf28Akfh_o4l6nosKAmGn97cGNwi4rXyJHRSRX8hPY82tzqOsSCyOxcu0amVD8_RRR0nvtC2XDubgP3KYMkVh2ddnEgSCUu6ffLqs5ToSW3Mgrv6Q_8QIi_JEaCgYKAXQSARISFQHGX2MiNnp5JgJTFKGLypClaOaEQA0206","refresh_token":"${{ secrets.GDRIVE_REFRESH_TOKEN }}","expiry":"2026-05-03T00:00:00Z"}
+        scope = drive
+        root_folder_id = ${{ secrets.FOLDER_ID }}
+        use_refresh_token = true
+        EOF
+
+    - name: Upload to Google Drive and retrieve link
       id: upload
-      uses: Jumbo810/Upload_Github_Artifacts_TO_GDrive@v2.3.3
-      with:
-        target: "*.mp4"
-        credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
-        parent_folder_id: ${{ secrets.FOLDER_ID }}
-        override: false   # Do not delete existing files
+      run: |
+        FILE="${{ steps.download.outputs.video_file }}"
+        rclone copy "$FILE" "gdrive:" --verbose
+        sleep 3
+        FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+        if [ -n "$FILE_ID" ]; then
+          LINK="https://drive.google.com/file/d/${FILE_ID}/view"
+          echo "Drive link: ${LINK}"
+          echo "drive_url=${LINK}" >> $GITHUB_OUTPUT
+        else
+          echo "ERROR: Could not retrieve Drive link"
+          exit 1
+        fi
 
     - name: Create Release with Drive link
       uses: softprops/action-gh-release@v1
@@ -70,7 +93,7 @@ jobs:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
         body: |
-          Drive file URL: ${{ steps.upload.outputs.file_url }}
+          Drive file URL: ${{ steps.upload.outputs.drive_url }}
           File name: ${{ steps.download.outputs.video_file }}
         generate_release_notes: false
       env:
