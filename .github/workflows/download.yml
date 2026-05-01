@@ -57,7 +57,7 @@ jobs:
         curl https://rclone.org/install.sh | sudo bash
         sudo apt-get update && sudo apt-get install -y jq
 
-    - name: Configure rclone (non‑interactive, using refresh token)
+    - name: Configure rclone with correct folder ID as root
       run: |
         mkdir -p ~/.config/rclone
         cat <<EOF > ~/.config/rclone/rclone.conf
@@ -67,6 +67,7 @@ jobs:
         client_secret = ${{ secrets.GDRIVE_CLIENT_SECRET }}
         token = {"access_token":"ya29.a0AQvPyINGKY0df5N7J_jWbDwFuSF-O507uuxy_lOmrJGwNd9wWsvbOUqVTIuSx5DbAwv4pu3zmgsWhNYf28Akfh_o4l6nosKAmGn97cGNwi4rXyJHRSRX8hPY82tzqOsSCyOxcu0amVD8_RRR0nvtC2XDubgP3KYMkVh2ddnEgSCUu6ffLqs5ToSW3Mgrv6Q_8QIi_JEaCgYKAXQSARISFQHGX2MiNnp5JgJTFKGLypClaOaEQA0206","refresh_token":"${{ secrets.GDRIVE_REFRESH_TOKEN }}","expiry":"2026-05-03T00:00:00Z"}
         scope = drive
+        root_folder_id = ${{ secrets.FOLDER_ID }}
         use_refresh_token = true
         EOF
 
@@ -74,43 +75,20 @@ jobs:
       id: upload
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
-        FOLDER_ID="${{ secrets.FOLDER_ID }}"
-        # Build remote path
-        if [ -z "$FOLDER_ID" ]; then
-          REMOTE_PATH="$FILE"
-          DEST="gdrive:"
-        else
-          REMOTE_PATH="${FOLDER_ID}/$FILE"
-          DEST="gdrive:${FOLDER_ID}/"
-        fi
-        # Upload (ensures file exists on Drive)
-        rclone copy "$FILE" "$DEST" --verbose
-        # Allow time for indexing
+        # Copy to the root of the configured drive (which is already the target folder)
+        rclone copy "$FILE" "gdrive:" --verbose
         sleep 3
-        # Get shareable link using rclone link (most direct)
-        LINK=$(rclone link "gdrive:$REMOTE_PATH" 2>/dev/null || echo "")
-        if [ -z "$LINK" ]; then
-          # Fallback: extract file ID via lsjson
-          if [ -z "$FOLDER_ID" ]; then
-            FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
-          else
-            FILE_ID=$(rclone lsjson "gdrive:${FOLDER_ID}" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
-          fi
-          if [ -n "$FILE_ID" ]; then
-            LINK="https://drive.google.com/file/d/${FILE_ID}/view"
-          fi
+        # List files in the remote to get the file ID
+        FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+        if [ -n "$FILE_ID" ]; then
+          LINK="https://drive.google.com/file/d/${FILE_ID}/view"
+          echo "file_url=${LINK}" >> $GITHUB_OUTPUT
+          echo "Drive link: ${LINK}"   # Print to logs for script to capture
+        else
+          echo "file_url=Upload successful but link not found" >> $GITHUB_OUTPUT
         fi
-        # Fallback 2: try searching the entire drive (slower)
-        if [ -z "$LINK" ]; then
-          FILE_ID=$(rclone lsjson "gdrive:" --recursive | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
-          if [ -n "$FILE_ID" ]; then
-            LINK="https://drive.google.com/file/d/${FILE_ID}/view"
-          fi
-        fi
-        echo "file_url=${LINK}" >> $GITHUB_OUTPUT
-        echo "Drive link: ${LINK}"
 
-    - name: Create Release with Drive link
+    - name: Create Release (temp, will be deleted)
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
@@ -122,8 +100,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Delete release (cleanup) after successful upload
-      if: always() && steps.upload.outcome == 'success'
+    - name: Delete release (cleanup)
+      if: always()
       uses: dev-drprasad/delete-tag-and-release@v1.1
       with:
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
