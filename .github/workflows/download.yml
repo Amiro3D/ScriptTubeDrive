@@ -68,30 +68,39 @@ jobs:
         use_refresh_token = true
         EOF
 
-    - name: Upload to Google Drive and capture file ID
+    - name: Upload to Google Drive and get shareable link
       id: upload
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
         FOLDER_ID="${{ secrets.FOLDER_ID }}"
-        # Determine destination
         if [ -z "$FOLDER_ID" ]; then
           DEST="gdrive:"
+          REMOTE_PATH="$FILE"
         else
           DEST="gdrive:${FOLDER_ID}/"
+          REMOTE_PATH="${FOLDER_ID}/$FILE"
         fi
-        # Upload
+        # Upload (skip if already exists; that's fine)
         rclone copy "$FILE" "$DEST" --verbose
-        # Retrieve file ID from the destination
-        if [ -z "$FOLDER_ID" ]; then
-          FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+        # Get the shareable link
+        LINK=$(rclone link "gdrive:$REMOTE_PATH" 2>/dev/null || echo "")
+        if [ -n "$LINK" ]; then
+          echo "file_url=${LINK}" >> $GITHUB_OUTPUT
         else
-          FILE_ID=$(rclone lsjson "gdrive:${FOLDER_ID}" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+          # Fallback: try to find file ID via lsjson
+          if [ -z "$FOLDER_ID" ]; then
+            FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+          else
+            FILE_ID=$(rclone lsjson "gdrive:${FOLDER_ID}" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+          fi
+          if [ -n "$FILE_ID" ]; then
+            echo "file_url=https://drive.google.com/file/d/${FILE_ID}/view" >> $GITHUB_OUTPUT
+          else
+            echo "file_url=Upload successful but could not retrieve link" >> $GITHUB_OUTPUT
+          fi
         fi
-        if [ -n "$FILE_ID" ]; then
-          echo "file_url=https://drive.google.com/file/d/${FILE_ID}/view" >> $GITHUB_OUTPUT
-        else
-          echo "file_url=Uploaded but could not retrieve direct link" >> $GITHUB_OUTPUT
-        fi
+        # Debug output
+        echo "Drive URL: ${{ steps.upload.outputs.file_url }}"
 
     - name: Create Release with Drive link
       uses: softprops/action-gh-release@v1
