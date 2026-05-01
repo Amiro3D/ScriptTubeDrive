@@ -12,8 +12,6 @@ on:
 jobs:
   download:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
     - name: Checkout repository
@@ -75,35 +73,14 @@ jobs:
       id: upload
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
-        # Copy to the root of the configured drive (which is already the target folder)
         rclone copy "$FILE" "gdrive:" --verbose
         sleep 3
-        # List files in the remote to get the file ID
         FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
         if [ -n "$FILE_ID" ]; then
           LINK="https://drive.google.com/file/d/${FILE_ID}/view"
-          echo "file_url=${LINK}" >> $GITHUB_OUTPUT
-          echo "Drive link: ${LINK}"   # Print to logs for script to capture
+          echo "Drive link: ${LINK}"
+          echo "Request ID: ${{ steps.title.outputs.request_id }}"
         else
-          echo "file_url=Upload successful but link not found" >> $GITHUB_OUTPUT
+          echo "ERROR: Could not retrieve Drive link for $FILE"
+          exit 1
         fi
-
-    - name: Create Release (temp, will be deleted)
-      uses: softprops/action-gh-release@v1
-      with:
-        name: "Video: ${{ steps.title.outputs.raw_title }}"
-        tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
-        body: |
-          Drive file URL: ${{ steps.upload.outputs.file_url }}
-          File name: ${{ steps.download.outputs.video_file }}
-        generate_release_notes: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Delete release (cleanup)
-      if: always()
-      uses: dev-drprasad/delete-tag-and-release@v1.1
-      with:
-        tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
-        delete_release: true
-        github_token: ${{ secrets.GITHUB_TOKEN }}
