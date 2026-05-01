@@ -34,7 +34,7 @@ jobs:
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
-        SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-100)
+        SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-80)
         if [ -z "$SAFE_TITLE" ]; then
           SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
         fi
@@ -47,36 +47,22 @@ jobs:
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
+        # Add timestamp to make filename unique
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        FINAL_NAME="${SAFE_TITLE}_${TIMESTAMP}.mp4"
         yt-dlp -f "best[height<=720]" --merge-output-format mp4 --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-          -o "${SAFE_TITLE}.mp4" "$URL"
-        echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
+          -o "$FINAL_NAME" "$URL"
+        echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
-    - name: Upload to Google Drive (Jumbo810)
+    - name: Upload to Google Drive (no override)
       id: upload
       uses: Jumbo810/Upload_Github_Artifacts_TO_GDrive@v2.3.3
       with:
         target: "*.mp4"
         credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
         parent_folder_id: ${{ secrets.FOLDER_ID }}
-        override: true
-
-    - name: Extract Drive link from logs and create release
-      id: release
-      run: |
-        # The upload action prints the Drive URL in its logs.
-        # We'll capture it from the step's output or from the log.
-        # The action outputs a variable 'file_url' – let's use that.
-        DRIVE_URL="${{ steps.upload.outputs.file_url }}"
-        if [ -z "$DRIVE_URL" ]; then
-          # Fallback: try to extract from the logs (not needed if output works)
-          echo "Warning: file_url output empty, trying to guess from filename"
-          # Construct URL from known file ID? Not reliable.
-          # Instead, we'll just use a placeholder.
-          DRIVE_URL="https://drive.google.com/drive/folders/${{ secrets.FOLDER_ID }}"
-        fi
-        echo "Drive URL: $DRIVE_URL"
-        echo "drive_url=$DRIVE_URL" >> $GITHUB_OUTPUT
+        override: false   # Do not delete existing files
 
     - name: Create Release with Drive link
       uses: softprops/action-gh-release@v1
@@ -84,7 +70,7 @@ jobs:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
         body: |
-          Drive file URL: ${{ steps.release.outputs.drive_url }}
+          Drive file URL: ${{ steps.upload.outputs.file_url }}
           File name: ${{ steps.download.outputs.video_file }}
         generate_release_notes: false
       env:
