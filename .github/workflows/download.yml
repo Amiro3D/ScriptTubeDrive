@@ -42,24 +42,22 @@ jobs:
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
-    - name: Download video with unique timestamp
+    - name: Download video
       id: download
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
-        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-        FINAL_NAME="${SAFE_TITLE}_${TIMESTAMP}.mp4"
         yt-dlp -f "best[height<=720]" --merge-output-format mp4 --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-          -o "$FINAL_NAME" "$URL"
-        echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          -o "${SAFE_TITLE}.mp4" "$URL"
+        echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
 
     - name: Install rclone and jq
       run: |
         curl https://rclone.org/install.sh | sudo bash
         sudo apt-get update && sudo apt-get install -y jq
 
-    - name: Configure rclone with OAuth (hardcoded)
+    - name: Configure rclone with OAuth (hardcoded latest credentials)
       run: |
         mkdir -p ~/.config/rclone
         cat <<EOF > ~/.config/rclone/rclone.conf
