@@ -70,32 +70,45 @@ jobs:
         use_refresh_token = true
         EOF
 
-    - name: Upload to Google Drive and capture file ID
+    - name: Upload to Google Drive and capture link
       id: upload
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
         FOLDER_ID="${{ secrets.FOLDER_ID }}"
-        # Upload to appropriate destination
+        # Build remote path
         if [ -z "$FOLDER_ID" ]; then
+          REMOTE_PATH="$FILE"
           DEST="gdrive:"
         else
+          REMOTE_PATH="${FOLDER_ID}/$FILE"
           DEST="gdrive:${FOLDER_ID}/"
         fi
+        # Upload (ensures file exists on Drive)
         rclone copy "$FILE" "$DEST" --verbose
-        # Wait a moment for the file to be indexed
+        # Allow time for indexing
         sleep 3
-        # Retrieve file ID using lsjson
-        if [ -z "$FOLDER_ID" ]; then
-          FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
-        else
-          FILE_ID=$(rclone lsjson "gdrive:${FOLDER_ID}" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+        # Get shareable link using rclone link (most direct)
+        LINK=$(rclone link "gdrive:$REMOTE_PATH" 2>/dev/null || echo "")
+        if [ -z "$LINK" ]; then
+          # Fallback: extract file ID via lsjson
+          if [ -z "$FOLDER_ID" ]; then
+            FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+          else
+            FILE_ID=$(rclone lsjson "gdrive:${FOLDER_ID}" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+          fi
+          if [ -n "$FILE_ID" ]; then
+            LINK="https://drive.google.com/file/d/${FILE_ID}/view"
+          fi
         fi
-        if [ -n "$FILE_ID" ]; then
-          LINK="https://drive.google.com/file/d/${FILE_ID}/view"
-          echo "file_url=${LINK}" >> $GITHUB_OUTPUT
-        else
-          echo "file_url=Upload successful but could not retrieve link" >> $GITHUB_OUTPUT
+        # Fallback 2: try searching the entire drive (slower)
+        if [ -z "$LINK" ]; then
+          FILE_ID=$(rclone lsjson "gdrive:" --recursive | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+          if [ -n "$FILE_ID" ]; then
+            LINK="https://drive.google.com/file/d/${FILE_ID}/view"
+          fi
         fi
+        echo "file_url=${LINK}" >> $GITHUB_OUTPUT
+        echo "Drive link: ${LINK}"
 
     - name: Create Release with Drive link
       uses: softprops/action-gh-release@v1
