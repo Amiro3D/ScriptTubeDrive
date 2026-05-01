@@ -38,9 +38,6 @@ jobs:
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
-    - name: Install zip
-      run: sudo apt-get install -y zip
-
     - name: Download video
       id: download
       run: |
@@ -64,21 +61,18 @@ jobs:
         if [ $FILE_SIZE -gt $MAX_SIZE ]; then
           echo "needs_split=true" >> $GITHUB_OUTPUT
           
-          # Calculate number of parts needed (ceiling division)
-          PART_COUNT=$(( (FILE_SIZE + MAX_SIZE - 1) / MAX_SIZE ))
-          echo "part_count=${PART_COUNT}" >> $GITHUB_OUTPUT
+          # Split into 40MB parts (simple split, no zip)
+          split -b $MAX_SIZE "${SAFE_TITLE}.mp4" "${SAFE_TITLE}.part."
           
-          # Split into 40MB parts and zip each part
-          for i in $(seq 1 $PART_COUNT); do
-            START=$(( ($i - 1) * MAX_SIZE ))
-            # Extract each chunk using dd
-            dd if="${SAFE_TITLE}.mp4" of="part${i}.mp4" bs=1 skip=$START count=$MAX_SIZE 2>/dev/null
-            # Zip the chunk to ensure it's under 50MB (Apps Script limit)
-            zip "part${i}.zip" "part${i}.mp4"
-            # Remove the raw part file
-            rm "part${i}.mp4"
-            echo "Created part${i}.zip"
+          # Rename parts to have nice names
+          PART_NUM=1
+          for part in ${SAFE_TITLE}.part.*; do
+            mv "$part" "${SAFE_TITLE}.part${PART_NUM}.mp4"
+            PART_NUM=$((PART_NUM + 1))
           done
+          
+          PART_COUNT=$((PART_NUM - 1))
+          echo "part_count=${PART_COUNT}" >> $GITHUB_OUTPUT
           
           # Remove original file
           rm "${SAFE_TITLE}.mp4"
@@ -96,7 +90,6 @@ jobs:
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
         files: |
           *.mp4
-          *.zip
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
