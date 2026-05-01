@@ -68,27 +68,29 @@ jobs:
         use_refresh_token = true
         EOF
 
-    - name: Upload to Google Drive
+    - name: Upload to Google Drive and capture file ID
       id: upload
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
         FOLDER_ID="${{ secrets.FOLDER_ID }}"
+        # Determine destination
         if [ -z "$FOLDER_ID" ]; then
-          rclone copy "$FILE" gdrive: --verbose
+          DEST="gdrive:"
         else
-          rclone copy "$FILE" "gdrive:${FOLDER_ID}" --verbose
+          DEST="gdrive:${FOLDER_ID}/"
         fi
-        # Retrieve the file ID
-        FILE_ID=$(rclone lsf "gdrive:" --files-only --format "p" | grep "$FILE" | head -1 || echo "")
+        # Upload
+        rclone copy "$FILE" "$DEST" --verbose
+        # Retrieve file ID from the destination
+        if [ -z "$FOLDER_ID" ]; then
+          FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+        else
+          FILE_ID=$(rclone lsjson "gdrive:${FOLDER_ID}" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+        fi
         if [ -n "$FILE_ID" ]; then
           echo "file_url=https://drive.google.com/file/d/${FILE_ID}/view" >> $GITHUB_OUTPUT
         else
-          FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
-          if [ -n "$FILE_ID" ]; then
-            echo "file_url=https://drive.google.com/file/d/${FILE_ID}/view" >> $GITHUB_OUTPUT
-          else
-            echo "file_url=Uploaded (could not retrieve direct link)" >> $GITHUB_OUTPUT
-          fi
+          echo "file_url=Uploaded but could not retrieve direct link" >> $GITHUB_OUTPUT
         fi
 
     - name: Create Release with Drive link
