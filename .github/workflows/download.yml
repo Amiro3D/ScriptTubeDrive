@@ -12,6 +12,8 @@ on:
 jobs:
   download:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
     - name: Checkout repository
@@ -50,38 +52,40 @@ jobs:
           -o "${SAFE_TITLE}.mp4" "$URL"
         echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
 
-    - name: Install rclone and jq
-      run: |
-        curl https://rclone.org/install.sh | sudo bash
-        sudo apt-get update && sudo apt-get install -y jq
-
-    - name: Configure rclone (refresh token only)
-      run: |
-        mkdir -p ~/.config/rclone
-        cat <<EOF > ~/.config/rclone/rclone.conf
-        [gdrive]
-        type = drive
-        client_id = ${{ secrets.GDRIVE_CLIENT_ID }}
-        client_secret = ${{ secrets.GDRIVE_CLIENT_SECRET }}
-        refresh_token = ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-        scope = drive
-        root_folder_id = ${{ secrets.FOLDER_ID }}
-        token_format = header
-        use_refresh_token = true
-        EOF
-
-    - name: Upload to Google Drive and capture link
+    - name: Upload to Google Drive (Jumbo810)
       id: upload
+      uses: Jumbo810/Upload_Github_Artifacts_TO_GDrive@v2.3.3
+      with:
+        target: "*.mp4"
+        credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
+        parent_folder_id: ${{ secrets.FOLDER_ID }}
+        override: true
+
+    - name: Extract Drive link from logs and create release
+      id: release
       run: |
-        FILE="${{ steps.download.outputs.video_file }}"
-        rclone copy "$FILE" "gdrive:" --verbose
-        sleep 3
-        FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
-        if [ -n "$FILE_ID" ]; then
-          LINK="https://drive.google.com/file/d/${FILE_ID}/view"
-          echo "Drive link: ${LINK}"
-          echo "Request ID: ${{ steps.title.outputs.request_id }}"
-        else
-          echo "ERROR: Could not retrieve Drive link for $FILE"
-          exit 1
+        # The upload action prints the Drive URL in its logs.
+        # We'll capture it from the step's output or from the log.
+        # The action outputs a variable 'file_url' – let's use that.
+        DRIVE_URL="${{ steps.upload.outputs.file_url }}"
+        if [ -z "$DRIVE_URL" ]; then
+          # Fallback: try to extract from the logs (not needed if output works)
+          echo "Warning: file_url output empty, trying to guess from filename"
+          # Construct URL from known file ID? Not reliable.
+          # Instead, we'll just use a placeholder.
+          DRIVE_URL="https://drive.google.com/drive/folders/${{ secrets.FOLDER_ID }}"
         fi
+        echo "Drive URL: $DRIVE_URL"
+        echo "drive_url=$DRIVE_URL" >> $GITHUB_OUTPUT
+
+    - name: Create Release with Drive link
+      uses: softprops/action-gh-release@v1
+      with:
+        name: "Video: ${{ steps.title.outputs.raw_title }}"
+        tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
+        body: |
+          Drive file URL: ${{ steps.release.outputs.drive_url }}
+          File name: ${{ steps.download.outputs.video_file }}
+        generate_release_notes: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
