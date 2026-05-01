@@ -52,17 +52,44 @@ jobs:
           -o "${SAFE_TITLE}.mp4" "$URL"
         echo "video_file=${SAFE_TITLE}.mp4" >> $GITHUB_OUTPUT
 
-    - name: Upload to Google Drive (OAuth)
+    - name: Install rclone
+      run: curl https://rclone.org/install.sh | sudo bash
+
+    - name: Configure rclone with OAuth
+      run: |
+        mkdir -p ~/.config/rclone
+        cat <<EOF > ~/.config/rclone/rclone.conf
+        [gdrive]
+        type = drive
+        scope = drive
+        token = {"access_token":"","refresh_token":"${{ secrets.GDRIVE_REFRESH_TOKEN }}","expiry":"2020-01-01T00:00:00Z"}
+        client_id = ${{ secrets.GDRIVE_CLIENT_ID }}
+        client_secret = ${{ secrets.GDRIVE_CLIENT_SECRET }}
+        EOF
+
+    - name: Upload to Google Drive
       id: upload
-      uses: maxkomarychev/upload-to-google-drive@v2.1.1
-      with:
-        folder_id: ${{ secrets.FOLDER_ID }}
-        client_id: ${{ secrets.GDRIVE_CLIENT_ID }}
-        client_secret: ${{ secrets.GDRIVE_CLIENT_SECRET }}
-        refresh_token: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-        file_path: ${{ steps.download.outputs.video_file }}
-        name: "${{ steps.title.outputs.raw_title }}.mp4"
-        content_type: video/mp4
+      run: |
+        FILE="${{ steps.download.outputs.video_file }}"
+        FOLDER_ID="${{ secrets.FOLDER_ID }}"
+        if [ -z "$FOLDER_ID" ]; then
+          rclone copy "$FILE" gdrive: --verbose
+        else
+          rclone copy "$FILE" "gdrive:${FOLDER_ID}" --verbose
+        fi
+        # Get the file ID from rclone
+        FILE_ID=$(rclone lsf "gdrive:" --files-only --format "p" | grep "$FILE" | head -1 || echo "")
+        if [ -n "$FILE_ID" ]; then
+          echo "file_url=https://drive.google.com/file/d/${FILE_ID}/view" >> $GITHUB_OUTPUT
+        else
+          # Fallback: try to find the file by name (less reliable but works)
+          FILE_ID=$(rclone lsjson "gdrive:" --files-only | jq -r ".[] | select(.Name==\"$FILE\") | .ID" | head -1)
+          if [ -n "$FILE_ID" ]; then
+            echo "file_url=https://drive.google.com/file/d/${FILE_ID}/view" >> $GITHUB_OUTPUT
+          else
+            echo "file_url=Uploaded but could not retrieve direct link" >> $GITHUB_OUTPUT
+          fi
+        fi
 
     - name: Create Release with Drive link
       uses: softprops/action-gh-release@v1
