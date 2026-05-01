@@ -54,56 +54,55 @@ jobs:
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
     - name: Download video with quality selection
+      id: download
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         QUALITY="${{ github.event.client_payload.quality || github.event.inputs.quality || '720' }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
         
-        # Map quality to yt-dlp format selector (auto‑fallback to nearest)
+        # Map quality to yt-dlp format selector
         case "$QUALITY" in
-          "144")
-            YTDLP_F="-f bestvideo[height<=144]+bestaudio/best[height<=144]"
-            ;;
-          "240")
-            YTDLP_F="-f bestvideo[height<=240]+bestaudio/best[height<=240]"
-            ;;
-          "360")
-            YTDLP_F="-f bestvideo[height<=360]+bestaudio/best[height<=360]"
-            ;;
-          "480")
-            YTDLP_F="-f bestvideo[height<=480]+bestaudio/best[height<=480]"
-            ;;
-          "720")
-            YTDLP_F="-f bestvideo[height<=720]+bestaudio/best[height<=720]"
-            ;;
-          "1080")
-            YTDLP_F="-f bestvideo[height<=1080]+bestaudio/best[height<=1080]"
-            ;;
-          "best")
-            YTDLP_F="--merge-output-format mp4"
-            ;;
-          "audio")
-            YTDLP_F="-x --audio-format mp3"
-            ;;
-          *)
-            YTDLP_F="-f bestvideo[height<=720]+bestaudio/best[height<=720]"
-            ;;
+          "144")  YTDLP_F="-f bestvideo[height<=144]+bestaudio/best[height<=144]" ;;
+          "240")  YTDLP_F="-f bestvideo[height<=240]+bestaudio/best[height<=240]" ;;
+          "360")  YTDLP_F="-f bestvideo[height<=360]+bestaudio/best[height<=360]" ;;
+          "480")  YTDLP_F="-f bestvideo[height<=480]+bestaudio/best[height<=480]" ;;
+          "720")  YTDLP_F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
+          "1080") YTDLP_F="-f bestvideo[height<=1080]+bestaudio/best[height<=1080]" ;;
+          "best") YTDLP_F="--merge-output-format mp4" ;;
+          "audio") YTDLP_F="-x --audio-format mp3" ;;
+          *)      YTDLP_F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
         
+        # Run yt-dlp
         yt-dlp $YTDLP_F \
           --merge-output-format mp4 \
           --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
           -o "${SAFE_TITLE}.%(ext)s" "$URL"
         
-        # Determine output file extension
+        # Determine extension and capture the actual output filename
         if [ "$QUALITY" = "audio" ]; then
           EXT="mp3"
         else
           EXT="mp4"
         fi
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
-        echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+        # Verify that the file exists
+        if [ -f "$FINAL_NAME" ]; then
+          echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+        else
+          # Fallback: try to find any .mp4 or .mp3 file
+          FOUND=$(ls *.${EXT} 2>/dev/null | head -1)
+          if [ -n "$FOUND" ]; then
+            echo "video_file=${FOUND}" >> $GITHUB_OUTPUT
+          else
+            echo "ERROR: No output file found"
+            exit 1
+          fi
+        fi
+
+    - name: List files for debugging
+      run: ls -la
 
     - name: Create Release with Run ID and Request ID
       uses: softprops/action-gh-release@v1
