@@ -22,6 +22,9 @@ jobs:
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
 
+    - name: Install zip
+      run: sudo apt-get install -y zip
+
     - name: Get video title and sanitize it
       id: title
       run: |
@@ -61,13 +64,14 @@ jobs:
         if [ $FILE_SIZE -gt $MAX_SIZE ]; then
           echo "needs_split=true" >> $GITHUB_OUTPUT
           
-          # Split into 40MB parts (simple split, no zip)
+          # Split into 40MB parts
           split -b $MAX_SIZE "${SAFE_TITLE}.mp4" "${SAFE_TITLE}.part."
           
-          # Rename parts to have nice names
+          # Zip each part individually
           PART_NUM=1
           for part in ${SAFE_TITLE}.part.*; do
-            mv "$part" "${SAFE_TITLE}.part${PART_NUM}.mp4"
+            zip "part${PART_NUM}.zip" "$part"
+            rm "$part"
             PART_NUM=$((PART_NUM + 1))
           done
           
@@ -89,6 +93,7 @@ jobs:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
         files: |
+          *.zip
           *.mp4
         generate_release_notes: false
       env:
