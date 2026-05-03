@@ -37,6 +37,14 @@ jobs:
     - name: Setup yt-dlp
       uses: AnimMouse/setup-yt-dlp@v3
 
+    # 🔥 CRITICAL: Ensure cookies.txt exists
+    - name: Check cookies
+      run: |
+        if [ ! -f cookies.txt ]; then
+          echo "cookies.txt not found! Please add it to the repository."
+          exit 1
+        fi
+
     - name: Get video title and sanitize it
       id: title
       run: |
@@ -53,6 +61,7 @@ jobs:
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
+    # 🔥 FIXED: Download with cookies and split logic
     - name: Download video with quality selection
       id: download
       run: |
@@ -73,6 +82,7 @@ jobs:
           *)      YTDLP_F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
         
+        # 🔥 COOKIES ARE NOW USED
         yt-dlp $YTDLP_F \
           --merge-output-format mp4 \
           --cookies cookies.txt \
@@ -97,15 +107,8 @@ jobs:
             zip -s 45m "${SAFE_TITLE}.zip" "$FINAL_NAME"
             # Remove the original large file
             rm "$FINAL_NAME"
-            # Rename the parts to have consistent naming (optional)
-            # The parts are named like: ${SAFE_TITLE}.zip, ${SAFE_TITLE}.z01, ${SAFE_TITLE}.z02, ...
-            ls -la "${SAFE_TITLE}".z* "${SAFE_TITLE}".zip 2>/dev/null
-            # We will upload all these parts. Set output variable to a marker.
-            echo "split=true" >> $GITHUB_OUTPUT
-            # We'll list the parts dynamically in the release step
           else
             echo "File size within limit (${FILE_SIZE} bytes), no split"
-            echo "split=false" >> $GITHUB_OUTPUT
           fi
         else
           echo "ERROR: Output file not found"
@@ -123,7 +126,5 @@ jobs:
           *.zip
           *.z*
         generate_release_notes: false
-        body: |
-          Split: ${{ steps.download.outputs.split }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
