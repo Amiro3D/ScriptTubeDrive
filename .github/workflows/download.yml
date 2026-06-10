@@ -34,16 +34,30 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup yt-dlp
-      uses: AnimMouse/setup-yt-dlp@v3
+    # ۱. تولید کلید اختصاصی بر اساس سال و شماره هفته میلادی
+    - name: Get current week number
+      id: get-date
+      run: echo "week=$(date +'%Y-%U')" >> $GITHUB_OUTPUT
 
-    # 🔥 CRITICAL: Ensure cookies.txt exists
-    - name: Check cookies
+    # ۲. بررسی وجود ابزار در کش گیت‌هاب
+    - name: Cache yt-dlp
+      id: cache-ytdlp
+      uses: actions/cache@v4
+      with:
+        path: bin/yt-dlp
+        key: ${{ runner.os }}-ytdlp-${{ steps.get-date.outputs.week }}
+
+    # ۳. اگر کش وجود نداشت، خیلی سریع فایل باینری اصلی رو دانلود می‌کنه
+    - name: Install yt-dlp if not cached
+      if: steps.cache-ytdlp.outputs.cache-hit != 'true'
       run: |
-        if [ ! -f cookies.txt ]; then
-          echo "cookies.txt not found! Please add it to the repository."
-          exit 1
-        fi
+        mkdir -p bin
+        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o bin/yt-dlp
+        chmod +x bin/yt-dlp
+
+    # ۴. اضافه کردن فولدر ابزار به مسیرهای اصلی سیستم‌عامل
+    - name: Add bin to PATH
+      run: echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
 
     - name: Get video title and sanitize it
       id: title
@@ -61,7 +75,6 @@ jobs:
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
-    # 🔥 FIXED: Download with cookies and split logic
     - name: Download video with quality selection
       id: download
       run: |
@@ -82,49 +95,43 @@ jobs:
           *)      YTDLP_F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
         
-        # 🔥 COOKIES ARE NOW USED
+        # Run yt-dlp
         yt-dlp $YTDLP_F \
           --merge-output-format mp4 \
           --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
           -o "${SAFE_TITLE}.%(ext)s" "$URL"
         
-        # Determine output file extension
+        # Determine extension and capture the actual output filename
         if [ "$QUALITY" = "audio" ]; then
           EXT="mp3"
         else
           EXT="mp4"
         fi
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
-        
-        # Check file size and split if > 45 MB (45 * 1024 * 1024 = 47185920 bytes)
-        MAX_SIZE=47185920
+        # Verify that the file exists
         if [ -f "$FINAL_NAME" ]; then
-          FILE_SIZE=$(stat -c%s "$FINAL_NAME")
-          if [ "$FILE_SIZE" -gt "$MAX_SIZE" ]; then
-            echo "File size ${FILE_SIZE} > 45MB, splitting into 45MB zip parts"
-            # Split into 45MB zip parts (creates part1.zip, part2.zip, ...)
-            zip -s 45m "${SAFE_TITLE}.zip" "$FINAL_NAME"
-            # Remove the original large file
-            rm "$FINAL_NAME"
-          else
-            echo "File size within limit (${FILE_SIZE} bytes), no split"
-          fi
+          echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
         else
-          echo "ERROR: Output file not found"
-          exit 1
+          # Fallback: try to find any .mp4 or .mp3 file
+          FOUND=$(ls *.${EXT} 2>/dev/null | head -1)
+          if [ -n "$FOUND" ]; then
+            echo "video_file=${FOUND}" >> $GITHUB_OUTPUT
+          else
+            echo "ERROR: No output file found"
+            exit 1
+          fi
         fi
 
-    - name: Create Release with all assets (single file or split parts)
+    - name: List files for debugging
+      run: ls -la
+
+    - name: Create Release with Run ID and Request ID
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
-        files: |
-          *.mp4
-          *.mp3
-          *.zip
-          *.z*
+        files: "${{ steps.download.outputs.video_file }}"
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
