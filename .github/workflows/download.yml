@@ -133,12 +133,9 @@ jobs:
         MAX_SIZE=$((45 * 1024 * 1024))
 
         if [ "$FILE_SIZE" -gt "$MAX_SIZE" ]; then
-          echo "File size ($FILE_SIZE bytes) exceeds 45MB. Zipping and splitting into 45MB parts..."
-          # ابتدا فایل اصلی را زیپ می‌کنیم
-          zip -r temporary.zip "$REAL_FILE"
-          # سپس فایل زیپ شده را به پارت‌های ۴۵ مگابایتی تقسیم می‌کنیم
-          split -b 45M temporary.zip "upload_artifacts/${SAFE_TITLE}.zip.part_"
-          rm temporary.zip
+          echo "File size ($FILE_SIZE bytes) exceeds 45MB. Creating split zip archive..."
+          # زیپ و پارت‌بندی همزمان و نیتیو به تکه‌های ۴۵ مگابایتی
+          zip -s 45m "upload_artifacts/${SAFE_TITLE}.zip" "$REAL_FILE"
         else
           echo "File size ($FILE_SIZE bytes) is within 45MB. Copying file directly..."
           cp "$REAL_FILE" "upload_artifacts/"
