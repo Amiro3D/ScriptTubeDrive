@@ -52,11 +52,10 @@ jobs:
     - name: Setup FFmpeg
       uses: federicocarboni/setup-ffmpeg@v3
 
-    # ۴. نصب و آپدیت ابزارهای دانلود با استفاده از لایه کش دایرکتوری pip
+    # ۴. نصب برق‌آسای ابزارهای دانلود مستقیماً از کش
     - name: Install yt-dlp and EJS challenge solver
       run: |
-        python3 -m pip install --upgrade pip
-        pip install -U yt-dlp yt-dlp-ejs
+        pip install yt-dlp yt-dlp-ejs
 
     # ۵. تنظیم کانفیگ برای استفاده از موتور جاوااسکریپت پیش‌فرض گیت‌هاب
     - name: Configure JS Runtime for YouTube Challenge
