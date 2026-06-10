@@ -34,12 +34,12 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # ۱. تولید کلید اختصاصی بر اساس سال و شماره هفته میلادی برای آپدیت نگه داشتن هفتگی ابزار
+    # ۱. تولید کلید اختصاصی هفتگی برای آپدیت نگه داشتن کش پکیج‌ها
     - name: Get current week number
       id: get-date
       run: echo "week=$(date +'%Y-%U')" >> $GITHUB_OUTPUT
 
-    # ۲. کش کردن دایرکتوری pip برای بالا بردن سرعت نصب تا حد ثانیه
+    # ۲. سیستم کش برای بالا بردن سرعت نصب ابزارها تا حد ثانیه
     - name: Cache pip packages
       uses: actions/cache@v4
       with:
@@ -48,16 +48,16 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    # ۳. راه‌اندازی فوق‌العاده سریع ابزار میکس با استفاده از باینری‌های پیش‌ساخته (بدون دانلود سیستم‌عامل)
+    # ۳. راه‌اندازی فوق‌العاده سریع ابزار میکس با استفاده از باینری‌های پیش‌ساخته
     - name: Setup FFmpeg
       uses: federicocarboni/setup-ffmpeg@v3
 
-    # ۴. نصب برق‌آسای ابزارهای دانلود مستقیماً از کش
+    # ۴. نصب برق‌آسای ابزارهای دانلود مستقیماً از روی کش
     - name: Install yt-dlp and EJS challenge solver
       run: |
         pip install yt-dlp yt-dlp-ejs
 
-    # ۵. تنظیم کانفیگ برای استفاده از موتور جاوااسکریپت پیش‌فرض گیت‌هاب
+    # ۵. تنظیم کانفیگ موتور جاوااسکریپت برای چالش‌های یوتیوب
     - name: Configure JS Runtime for YouTube Challenge
       run: |
         mkdir -p ~/.config/yt-dlp
@@ -79,14 +79,14 @@ jobs:
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
 
-    - name: Download video with quality selection
+    - name: Download video and handle Zip/Split logic
       id: download
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
         QUALITY="${{ github.event.client_payload.quality || github.event.inputs.quality || '720' }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
         
-        # Map quality to yt-dlp format selector
+        # مپ کردن کیفیت انتخاب شده
         case "$QUALITY" in
           "144")  YTDLP_F="-f bestvideo[height<=144]+bestaudio/best[height<=144]" ;;
           "240")  YTDLP_F="-f bestvideo[height<=240]+bestaudio/best[height<=240]" ;;
@@ -99,43 +99,60 @@ jobs:
           *)      YTDLP_F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
         
-        # Run yt-dlp
+        # اجرای عملیات دانلود
         yt-dlp $YTDLP_F \
           --merge-output-format mp4 \
           --cookies cookies.txt \
           --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
           -o "${SAFE_TITLE}.%(ext)s" "$URL"
         
-        # Determine extension and capture the actual output filename
         if [ "$QUALITY" = "audio" ]; then
           EXT="mp3"
         else
           EXT="mp4"
         fi
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
-        # Verify that the file exists
+        
         if [ -f "$FINAL_NAME" ]; then
-          echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          REAL_FILE="$FINAL_NAME"
         else
-          # Fallback: try to find any .mp4 or .mp3 file
           FOUND=$(ls *.${EXT} 2>/dev/null | head -1)
           if [ -n "$FOUND" ]; then
-            echo "video_file=${FOUND}" >> $GITHUB_OUTPUT
+            REAL_FILE="$FOUND"
           else
             echo "ERROR: No output file found"
             exit 1
           fi
         fi
 
+        # ایجاد پوشه موقت آرتیفکت‌ها برای فرآیند آپلود ریلیز
+        mkdir -p upload_artifacts
+
+        # سنجش حجم فایل برای تصمیم‌گیری فرآیند زیپ و تقسیم (محدودیت ۴۵ مگابایت)
+        FILE_SIZE=$(stat -c%s "$REAL_FILE")
+        MAX_SIZE=$((45 * 1024 * 1024))
+
+        if [ "$FILE_SIZE" -gt "$MAX_SIZE" ]; then
+          echo "File size ($FILE_SIZE bytes) exceeds 45MB. Zipping and splitting into 45MB parts..."
+          # ابتدا فایل اصلی را زیپ می‌کنیم
+          zip -r temporary.zip "$REAL_FILE"
+          # سپس فایل زیپ شده را به پارت‌های ۴۵ مگابایتی تقسیم می‌کنیم
+          split -b 45M temporary.zip "upload_artifacts/${SAFE_TITLE}.zip.part_"
+          rm temporary.zip
+        else
+          echo "File size ($FILE_SIZE bytes) is within 45MB. Copying file directly..."
+          cp "$REAL_FILE" "upload_artifacts/"
+        fi
+
     - name: List files for debugging
-      run: ls -la
+      run: ls -la upload_artifacts/
 
     - name: Create Release with Run ID and Request ID
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
-        files: "${{ steps.download.outputs.video_file }}"
-        generate_notes: false
+        files: "upload_artifacts/*"
+        generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
