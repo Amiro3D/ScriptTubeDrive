@@ -34,30 +34,31 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # ۱. تولید کلید اختصاصی بر اساس سال و شماره هفته میلادی
+    # ۱. تولید کلید اختصاصی بر اساس سال و شماره هفته میلادی برای آپدیت نگه داشتن هفتگی ابزار
     - name: Get current week number
       id: get-date
       run: echo "week=$(date +'%Y-%U')" >> $GITHUB_OUTPUT
 
-    # ۲. بررسی وجود ابزار در کش گیت‌هاب
-    - name: Cache yt-dlp
-      id: cache-ytdlp
+    # ۲. کش کردن دایرکتوری pip برای بالا بردن سرعت نصب تا حد ثانیه
+    - name: Cache pip packages
       uses: actions/cache@v4
       with:
-        path: bin/yt-dlp
-        key: ${{ runner.os }}-ytdlp-${{ steps.get-date.outputs.week }}
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ steps.get-date.outputs.week }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
 
-    # ۳. اگر کش وجود نداشت، خیلی سریع فایل باینری اصلی رو دانلود می‌کنه
-    - name: Install yt-dlp if not cached
-      if: steps.cache-ytdlp.outputs.cache-hit != 'true'
+    # ۳. نصب و آپدیت ابزارها از کش یا اینترنت (در صورت تغییر هفته)
+    - name: Install yt-dlp and EJS challenge solver
       run: |
-        mkdir -p bin
-        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o bin/yt-dlp
-        chmod +x bin/yt-dlp
+        python3 -m pip install --upgrade pip
+        pip install -U yt-dlp yt-dlp-ejs
 
-    # ۴. اضافه کردن فولدر ابزار به مسیرهای اصلی سیستم‌عامل
-    - name: Add bin to PATH
-      run: echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
+    # ۴. تنظیم کانفیگ برای استفاده از موتور جاوااسکریپت پیش‌فرض گیت‌هاب
+    - name: Configure JS Runtime for YouTube Challenge
+      run: |
+        mkdir -p ~/.config/yt-dlp
+        echo "--js-runtimes node" > ~/.config/yt-dlp/config
 
     - name: Get video title and sanitize it
       id: title
