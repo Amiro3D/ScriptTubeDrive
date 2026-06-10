@@ -34,31 +34,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # ۱. تولید کلید اختصاصی بر اساس سال و شماره هفته میلادی برای آپدیت نگه داشتن هفتگی ابزار
-    - name: Get current week number
-      id: get-date
-      run: echo "week=$(date +'%Y-%U')" >> $GITHUB_OUTPUT
-
-    # ۲. کش کردن دایرکتوری pip برای بالا بردن سرعت نصب تا حد ثانیه
-    - name: Cache pip packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ steps.get-date.outputs.week }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-
-    # ۳. نصب و آپدیت ابزارها از کش یا اینترنت (در صورت تغییر هفته)
-    - name: Install yt-dlp and EJS challenge solver
-      run: |
-        python3 -m pip install --upgrade pip
-        pip install -U yt-dlp yt-dlp-ejs
-
-    # ۴. تنظیم کانفیگ برای استفاده از موتور جاوااسکریپت پیش‌فرض گیت‌هاب
-    - name: Configure JS Runtime for YouTube Challenge
-      run: |
-        mkdir -p ~/.config/yt-dlp
-        echo "--js-runtimes node" > ~/.config/yt-dlp/config
+    - name: Setup yt-dlp
+      uses: AnimMouse/setup-yt-dlp@v3
 
     - name: Get video title and sanitize it
       id: title
