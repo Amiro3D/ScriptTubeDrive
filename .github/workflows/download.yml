@@ -48,14 +48,17 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    # ۳. نصب ابزار میکس سیستم‌عامل و آپدیت ابزارهای دانلود از کش یا اینترنت
-    - name: Install ffmpeg, yt-dlp and EJS challenge solver
+    # ۳. راه‌اندازی فوق‌العاده سریع ابزار میکس با استفاده از باینری‌های پیش‌ساخته (بدون دانلود سیستم‌عامل)
+    - name: Setup FFmpeg
+      uses: federicocarboni/setup-ffmpeg@v3
+
+    # ۴. نصب و آپدیت ابزارهای دانلود با استفاده از لایه کش دایرکتوری pip
+    - name: Install yt-dlp and EJS challenge solver
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg
         python3 -m pip install --upgrade pip
         pip install -U yt-dlp yt-dlp-ejs
 
-    # ۴. تنظیم کانفیگ برای استفاده از موتور جاوااسکریپت پیش‌فرض گیت‌هاب
+    # ۵. تنظیم کانفیگ برای استفاده از موتور جاوااسکریپت پیش‌فرض گیت‌هاب
     - name: Configure JS Runtime for YouTube Challenge
       run: |
         mkdir -p ~/.config/yt-dlp
