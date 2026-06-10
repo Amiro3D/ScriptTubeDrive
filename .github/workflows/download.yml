@@ -48,9 +48,10 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    # ۳. نصب و آپدیت ابزارها از کش یا اینترنت (در صورت تغییر هفته)
-    - name: Install yt-dlp and EJS challenge solver
+    # ۳. نصب ابزار میکس سیستم‌عامل و آپدیت ابزارهای دانلود از کش یا اینترنت
+    - name: Install ffmpeg, yt-dlp and EJS challenge solver
       run: |
+        sudo apt-get update && sudo apt-get install -y ffmpeg
         python3 -m pip install --upgrade pip
         pip install -U yt-dlp yt-dlp-ejs
 
@@ -133,6 +134,6 @@ jobs:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "req-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
         files: "${{ steps.download.outputs.video_file }}"
-        generate_release_notes: false
+        generate_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
