@@ -48,9 +48,64 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    # ۳. راه‌اندازی فوق‌العاده سریع ابزار میکس با استفاده از باینری‌های پیش‌ساخته
-    - name: Setup FFmpeg
-      uses: federicocarboni/setup-ffmpeg@v3
+    # ۳. راه‌اندازی فوق‌العاده سریع ابزار میکس با استفاده از باینری‌های پیش‌ساخته + Retry
+    - name: Setup FFmpeg with retry
+      run: |
+        # Retry up to 5 times with exponential backoff
+        MAX_RETRIES=5
+        RETRY_DELAY=2
+        
+        for i in $(seq 1 $MAX_RETRIES); do
+          echo "Attempt $i: Installing FFmpeg..."
+          
+          # Download latest ffmpeg release from johnvansickle
+          FFMPEG_URL=$(curl -s https://api.github.com/repos/johnvansickle/ffmpeg/releases/latest | grep -oP '"browser_download_url":.*?ffmpeg-release-amd64-static.tar.xz"' | head -1 | sed 's/"browser_download_url": "//;s/"$//')
+          
+          if [ -z "$FFMPEG_URL" ]; then
+            echo "Failed to get download URL"
+            if [ $i -lt $MAX_RETRIES ]; then
+              echo "Retrying in ${RETRY_DELAY}s..."
+              sleep $RETRY_DELAY
+              RETRY_DELAY=$((RETRY_DELAY * 2))
+              continue
+            else
+              exit 1
+            fi
+          fi
+          
+          wget -q --show-progress "$FFMPEG_URL" -O ffmpeg.tar.xz
+          if [ $? -ne 0 ]; then
+            echo "Download failed"
+            if [ $i -lt $MAX_RETRIES ]; then
+              echo "Retrying in ${RETRY_DELAY}s..."
+              sleep $RETRY_DELAY
+              RETRY_DELAY=$((RETRY_DELAY * 2))
+              continue
+            else
+              exit 1
+            fi
+          fi
+          
+          tar -xf ffmpeg.tar.xz
+          FFMPEG_DIR=$(tar -tf ffmpeg.tar.xz | head -1 | cut -d/ -f1)
+          sudo cp ${FFMPEG_DIR}/ffmpeg ${FFMPEG_DIR}/ffprobe /usr/local/bin/
+          rm -rf ffmpeg.tar.xz $FFMPEG_DIR
+          
+          if command -v ffmpeg &> /dev/null; then
+            echo "FFmpeg installed successfully"
+            ffmpeg -version | head -1
+            break
+          else
+            echo "Installation verification failed"
+            if [ $i -lt $MAX_RETRIES ]; then
+              echo "Retrying..."
+              sleep $RETRY_DELAY
+              RETRY_DELAY=$((RETRY_DELAY * 2))
+            else
+              exit 1
+            fi
+          fi
+        done
 
     # ۴. نصب برق‌آسای ابزارهای دانلود مستقیماً از روی کش
     - name: Install yt-dlp and EJS challenge solver
