@@ -1,0 +1,88 @@
+name: YouTube Direct Download (Single File)
+
+on:
+  repository_dispatch:
+    types: [direct_download]   # اسم جدید
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'YouTube URL'
+        required: true
+      quality:
+        description: 'Quality'
+        required: false
+        default: '720'
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup yt-dlp
+      uses: AnimMouse/setup-yt-dlp@v3
+
+    - name: Get video title and sanitize
+      id: title
+      run: |
+        URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
+        RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
+        SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-100)
+        if [ -z "$SAFE_TITLE" ]; then
+          SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
+        fi
+        echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
+        echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
+        echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
+
+    - name: Download video (single file, no split)
+      id: download
+      run: |
+        URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
+        QUALITY="${{ github.event.client_payload.quality || github.event.inputs.quality || '720' }}"
+        SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
+        
+        case "$QUALITY" in
+          "144")  YTDLP_F="-f bestvideo[height<=144]+bestaudio/best[height<=144]" ;;
+          "240")  YTDLP_F="-f bestvideo[height<=240]+bestaudio/best[height<=240]" ;;
+          "360")  YTDLP_F="-f bestvideo[height<=360]+bestaudio/best[height<=360]" ;;
+          "480")  YTDLP_F="-f bestvideo[height<=480]+bestaudio/best[height<=480]" ;;
+          "720")  YTDLP_F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
+          "1080") YTDLP_F="-f bestvideo[height<=1080]+bestaudio/best[height<=1080]" ;;
+          "best") YTDLP_F="--merge-output-format mp4" ;;
+          "audio") YTDLP_F="-x --audio-format mp3" ;;
+          *)      YTDLP_F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
+        esac
+        
+        yt-dlp $YTDLP_F \
+          --merge-output-format mp4 \
+          --cookies cookies.txt \
+          --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+          -o "${SAFE_TITLE}.%(ext)s" "$URL"
+        
+        if [ "$QUALITY" = "audio" ]; then
+          EXT="mp3"
+        else
+          EXT="mp4"
+        fi
+        FINAL_NAME="${SAFE_TITLE}.${EXT}"
+        if [ -f "$FINAL_NAME" ]; then
+          echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+        else
+          echo "ERROR: No output file found"
+          exit 1
+        fi
+
+    - name: Create Release (single asset)
+      uses: softprops/action-gh-release@v1
+      with:
+        name: "Video: ${{ steps.title.outputs.raw_title }}"
+        tag_name: "direct-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
+        files: "${{ steps.download.outputs.video_file }}"
+        generate_release_notes: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
