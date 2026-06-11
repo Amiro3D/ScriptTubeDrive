@@ -48,35 +48,22 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    # ۳. راه‌اندازی فوق‌العاده سریع ابزار میکس با استفاده از باینری‌های پیش‌ساخته + Retry on failure
-    - name: Setup FFmpeg (with retry)
-      uses: nick-fields/retry@v3
+    # ۳. راه‌اندازی FFmpeg (با fallback در صورت خطا)
+    - name: Setup FFmpeg
+      id: setup_ffmpeg
+      continue-on-error: true  # اگر این مرحله خطا داد، کل workflow متوقف نمی‌شود
+      uses: federicocarboni/setup-ffmpeg@v3
       with:
-        max_attempts: 5
-        timeout_seconds: 60
-        retry_wait_seconds: 5
-        command: |
-          echo "Attempting to install FFmpeg..."
-          # استفاده از اکشن اصلی
-          # ما نمیتوانیم اکشن را داخل retry قرار دهیم، بنابراین دستورات معادل را اجرا می‌کنیم
-          # این دستورات همان کاری را انجام می‌دهند که اکشن federicocarboni/setup-ffmpeg انجام می‌دهد
-          FFMPEG_VERSION="release"
-          if [ "$FFMPEG_VERSION" = "release" ]; then
-            LATEST_URL=$(curl -s https://api.github.com/repos/johnvansickle/ffmpeg/releases/latest | grep -Eo 'https://github.com/johnvansickle/ffmpeg/releases/download/[^"]+/ffmpeg-release-amd64-static.tar.xz' | head -1)
-            if [ -z "$LATEST_URL" ]; then
-              echo "Failed to get latest release URL"
-              exit 1
-            fi
-            wget -O ffmpeg.tar.xz "$LATEST_URL"
-          else
-            wget -O ffmpeg.tar.xz "https://johnvansickle.com/ffmpeg/releases/ffmpeg-${FFMPEG_VERSION}-amd64-static.tar.xz"
-          fi
-          tar -xf ffmpeg.tar.xz
-          FFMPEG_DIR=$(tar -tf ffmpeg.tar.xz | head -1 | cut -d/ -f1)
-          sudo cp ${FFMPEG_DIR}/ffmpeg ${FFMPEG_DIR}/ffprobe /usr/local/bin/
-          rm -rf ffmpeg.tar.xz $FFMPEG_DIR
-          ffmpeg -version | head -1
-          echo "FFmpeg installed successfully"
+        ffmpeg-version: release
+        github-token: ${{ github.token }}
+
+    - name: Fallback - Install FFmpeg via apt if previous step failed
+      if: steps.setup_ffmpeg.outcome == 'failure'
+      run: |
+        echo "Static FFmpeg setup failed, installing via apt-get..."
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        ffmpeg -version | head -1
 
     # ۴. نصب برق‌آسای ابزارهای دانلود مستقیماً از روی کش
     - name: Install yt-dlp and EJS challenge solver
