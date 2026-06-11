@@ -48,71 +48,35 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    # ۳. راه‌اندازی FFmpeg با قابلیت Retry و Fallback (رفع خطای jq)
-    - name: Setup FFmpeg with retry
-      run: |
-        MAX_RETRIES=5
-        RETRY_DELAY=2
-        INSTALLED=0
-        
-        for i in $(seq 1 $MAX_RETRIES); do
-          echo "Attempt $i: Installing FFmpeg from johnvansickle static build..."
-          
-          # دریافت پاسخ API
-          API_RESPONSE=$(curl -s -H "Accept: application/vnd.github.v3+json" \
-            -H "User-Agent: GitHub-Action" \
-            https://api.github.com/repos/johnvansickle/ffmpeg/releases/latest)
-          
-          # بررسی خالی نبودن پاسخ
-          if [ -z "$API_RESPONSE" ] || [ "$API_RESPONSE" = "null" ]; then
-            echo "Empty API response"
-          else
-            # تلاش با jq (با مدیریت null)
-            FFMPEG_URL=$(echo "$API_RESPONSE" | jq -r '.assets // [] | .[] | select(.name | test("ffmpeg-release-amd64-static.tar.xz$")) | .browser_download_url' 2>/dev/null)
-            
-            # اگر jq موفق نشد یا خروجی null بود، از روش regex استفاده کن
-            if [ -z "$FFMPEG_URL" ] || [ "$FFMPEG_URL" = "null" ]; then
-              echo "jq failed, trying regex fallback..."
-              FFMPEG_URL=$(echo "$API_RESPONSE" | grep -oP '"browser_download_url":\s*"\K[^"]+ffmpeg-release-amd64-static\.tar\.xz"' | head -1)
+    # ۳. راه‌اندازی فوق‌العاده سریع ابزار میکس با استفاده از باینری‌های پیش‌ساخته + Retry on failure
+    - name: Setup FFmpeg (with retry)
+      uses: nick-fields/retry@v3
+      with:
+        max_attempts: 5
+        timeout_seconds: 60
+        retry_wait_seconds: 5
+        command: |
+          echo "Attempting to install FFmpeg..."
+          # استفاده از اکشن اصلی
+          # ما نمیتوانیم اکشن را داخل retry قرار دهیم، بنابراین دستورات معادل را اجرا می‌کنیم
+          # این دستورات همان کاری را انجام می‌دهند که اکشن federicocarboni/setup-ffmpeg انجام می‌دهد
+          FFMPEG_VERSION="release"
+          if [ "$FFMPEG_VERSION" = "release" ]; then
+            LATEST_URL=$(curl -s https://api.github.com/repos/johnvansickle/ffmpeg/releases/latest | grep -Eo 'https://github.com/johnvansickle/ffmpeg/releases/download/[^"]+/ffmpeg-release-amd64-static.tar.xz' | head -1)
+            if [ -z "$LATEST_URL" ]; then
+              echo "Failed to get latest release URL"
+              exit 1
             fi
-          fi
-          
-          # اگر آدرس پیدا شد، دانلود و نصب کن
-          if [ -n "$FFMPEG_URL" ] && [ "$FFMPEG_URL" != "null" ]; then
-            echo "Found download URL: $FFMPEG_URL"
-            wget -q --show-progress "$FFMPEG_URL" -O ffmpeg.tar.xz
-            if [ $? -eq 0 ]; then
-              tar -xf ffmpeg.tar.xz
-              FFMPEG_DIR=$(tar -tf ffmpeg.tar.xz | head -1 | cut -d/ -f1)
-              sudo cp ${FFMPEG_DIR}/ffmpeg ${FFMPEG_DIR}/ffprobe /usr/local/bin/
-              rm -rf ffmpeg.tar.xz $FFMPEG_DIR
-              if command -v ffmpeg &> /dev/null; then
-                echo "FFmpeg installed successfully from static build"
-                ffmpeg -version | head -1
-                INSTALLED=1
-                break
-              fi
-            fi
-          fi
-          
-          echo "Static build download failed (attempt $i). Retrying in ${RETRY_DELAY}s..."
-          sleep $RETRY_DELAY
-          RETRY_DELAY=$((RETRY_DELAY * 2))
-        done
-        
-        # Fallback به apt در صورت شکست تمام تلاش‌ها
-        if [ $INSTALLED -eq 0 ]; then
-          echo "All static build attempts failed. Falling back to apt-get install..."
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          if command -v ffmpeg &> /dev/null; then
-            echo "FFmpeg installed successfully via apt"
-            ffmpeg -version | head -1
+            wget -O ffmpeg.tar.xz "$LATEST_URL"
           else
-            echo "ERROR: FFmpeg installation failed completely"
-            exit 1
+            wget -O ffmpeg.tar.xz "https://johnvansickle.com/ffmpeg/releases/ffmpeg-${FFMPEG_VERSION}-amd64-static.tar.xz"
           fi
-        fi
+          tar -xf ffmpeg.tar.xz
+          FFMPEG_DIR=$(tar -tf ffmpeg.tar.xz | head -1 | cut -d/ -f1)
+          sudo cp ${FFMPEG_DIR}/ffmpeg ${FFMPEG_DIR}/ffprobe /usr/local/bin/
+          rm -rf ffmpeg.tar.xz $FFMPEG_DIR
+          ffmpeg -version | head -1
+          echo "FFmpeg installed successfully"
 
     # ۴. نصب برق‌آسای ابزارهای دانلود مستقیماً از روی کش
     - name: Install yt-dlp and EJS challenge solver
