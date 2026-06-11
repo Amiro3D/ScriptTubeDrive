@@ -48,7 +48,7 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    # ۳. راه‌اندازی FFmpeg با قابلیت Retry و Fallback
+    # ۳. راه‌اندازی FFmpeg با قابلیت Retry و Fallback (رفع خطای jq)
     - name: Setup FFmpeg with retry
       run: |
         MAX_RETRIES=5
@@ -58,11 +58,26 @@ jobs:
         for i in $(seq 1 $MAX_RETRIES); do
           echo "Attempt $i: Installing FFmpeg from johnvansickle static build..."
           
-          # Get download URL using jq (reliable JSON parsing)
-          FFMPEG_URL=$(curl -s -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/johnvansickle/ffmpeg/releases/latest | \
-            jq -r '.assets[] | select(.name | test("ffmpeg-release-amd64-static.tar.xz$")) | .browser_download_url')
+          # دریافت پاسخ API
+          API_RESPONSE=$(curl -s -H "Accept: application/vnd.github.v3+json" \
+            -H "User-Agent: GitHub-Action" \
+            https://api.github.com/repos/johnvansickle/ffmpeg/releases/latest)
           
+          # بررسی خالی نبودن پاسخ
+          if [ -z "$API_RESPONSE" ] || [ "$API_RESPONSE" = "null" ]; then
+            echo "Empty API response"
+          else
+            # تلاش با jq (با مدیریت null)
+            FFMPEG_URL=$(echo "$API_RESPONSE" | jq -r '.assets // [] | .[] | select(.name | test("ffmpeg-release-amd64-static.tar.xz$")) | .browser_download_url' 2>/dev/null)
+            
+            # اگر jq موفق نشد یا خروجی null بود، از روش regex استفاده کن
+            if [ -z "$FFMPEG_URL" ] || [ "$FFMPEG_URL" = "null" ]; then
+              echo "jq failed, trying regex fallback..."
+              FFMPEG_URL=$(echo "$API_RESPONSE" | grep -oP '"browser_download_url":\s*"\K[^"]+ffmpeg-release-amd64-static\.tar\.xz"' | head -1)
+            fi
+          fi
+          
+          # اگر آدرس پیدا شد، دانلود و نصب کن
           if [ -n "$FFMPEG_URL" ] && [ "$FFMPEG_URL" != "null" ]; then
             echo "Found download URL: $FFMPEG_URL"
             wget -q --show-progress "$FFMPEG_URL" -O ffmpeg.tar.xz
@@ -85,7 +100,7 @@ jobs:
           RETRY_DELAY=$((RETRY_DELAY * 2))
         done
         
-        # Fallback to apt if static build fails after all retries
+        # Fallback به apt در صورت شکست تمام تلاش‌ها
         if [ $INSTALLED -eq 0 ]; then
           echo "All static build attempts failed. Falling back to apt-get install..."
           sudo apt-get update
