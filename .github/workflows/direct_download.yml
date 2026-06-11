@@ -1,17 +1,28 @@
-name: YouTube Direct Download (Single File)
+name: YouTube Direct Download (No Split)
 
 on:
   repository_dispatch:
-    types: [direct_download]   # اسم جدید
+    types: [direct_download]    # new event type – will be triggered by the updated bot
   workflow_dispatch:
     inputs:
       url:
         description: 'YouTube URL'
         required: true
+        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
       quality:
         description: 'Quality'
         required: false
         default: '720'
+        type: choice
+        options:
+          - '144'
+          - '240'
+          - '360'
+          - '480'
+          - '720'
+          - '1080'
+          - 'best'
+          - 'audio'
 
 jobs:
   download:
@@ -23,18 +34,60 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup yt-dlp
-      uses: AnimMouse/setup-yt-dlp@v3
+    # ۱. تولید کلید اختصاصی هفتگی برای آپدیت نگه داشتن کش پکیج‌ها
+    - name: Get current week number
+      id: get-date
+      run: echo "week=$(date +'%Y-%U')" >> $GITHUB_OUTPUT
 
-    - name: Get video title and sanitize
+    # ۲. سیستم کش برای بالا بردن سرعت نصب ابزارها تا حد ثانیه
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ steps.get-date.outputs.week }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    # ۳. راه‌اندازی FFmpeg (با fallback در صورت خطا)
+    - name: Setup FFmpeg
+      id: setup_ffmpeg
+      continue-on-error: true
+      uses: federicocarboni/setup-ffmpeg@v3
+      with:
+        ffmpeg-version: release
+        github-token: ${{ github.token }}
+
+    - name: Fallback - Install FFmpeg via apt if previous step failed
+      if: steps.setup_ffmpeg.outcome == 'failure'
+      run: |
+        echo "Static FFmpeg setup failed, installing via apt-get..."
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        ffmpeg -version | head -1
+
+    # ۴. نصب برق‌آسای ابزارهای دانلود مستقیماً از روی کش
+    - name: Install yt-dlp and EJS challenge solver
+      run: |
+        pip install yt-dlp yt-dlp-ejs
+
+    # ۵. تنظیم کانفیگ موتور جاوااسکریپت برای چالش‌های یوتیوب
+    - name: Configure JS Runtime for YouTube Challenge
+      run: |
+        mkdir -p ~/.config/yt-dlp
+        echo "--js-runtimes node" > ~/.config/yt-dlp/config
+
+    - name: Get video title and sanitize it
       id: title
       run: |
         URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
+        
         RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//' | cut -c1-100)
+        
         if [ -z "$SAFE_TITLE" ]; then
           SAFE_TITLE="video_$(date +%Y%m%d_%H%M%S)"
         fi
+        
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
         echo "request_id=${{ github.event.client_payload.request_id }}" >> $GITHUB_OUTPUT
@@ -70,19 +123,35 @@ jobs:
           EXT="mp4"
         fi
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
+        
         if [ -f "$FINAL_NAME" ]; then
-          echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          REAL_FILE="$FINAL_NAME"
         else
-          echo "ERROR: No output file found"
-          exit 1
+          FOUND=$(ls *.${EXT} 2>/dev/null | head -1)
+          if [ -n "$FOUND" ]; then
+            REAL_FILE="$FOUND"
+          else
+            echo "ERROR: No output file found"
+            exit 1
+          fi
         fi
 
-    - name: Create Release (single asset)
+        # ایجاد پوشه موقت آرتیفکت‌ها
+        mkdir -p upload_artifacts
+
+        # --- قسمت حذف شده: دیگر هیچ شرطی روی حجم فایل وجود ندارد ---
+        # همیشه فایل را مستقیم کپی می‌کنیم (بدون زیپ یا پارت)
+        cp "$REAL_FILE" "upload_artifacts/"
+
+    - name: List files for debugging
+      run: ls -la upload_artifacts/
+
+    - name: Create Release with Run ID and Request ID
       uses: softprops/action-gh-release@v1
       with:
         name: "Video: ${{ steps.title.outputs.raw_title }}"
         tag_name: "direct-${{ steps.title.outputs.request_id }}-run-${{ github.run_id }}"
-        files: "${{ steps.download.outputs.video_file }}"
+        files: "upload_artifacts/*"
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
