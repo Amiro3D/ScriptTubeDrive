@@ -48,64 +48,56 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    # ۳. راه‌اندازی فوق‌العاده سریع ابزار میکس با استفاده از باینری‌های پیش‌ساخته + Retry
+    # ۳. راه‌اندازی FFmpeg با قابلیت Retry و Fallback
     - name: Setup FFmpeg with retry
       run: |
-        # Retry up to 5 times with exponential backoff
         MAX_RETRIES=5
         RETRY_DELAY=2
+        INSTALLED=0
         
         for i in $(seq 1 $MAX_RETRIES); do
-          echo "Attempt $i: Installing FFmpeg..."
+          echo "Attempt $i: Installing FFmpeg from johnvansickle static build..."
           
-          # Download latest ffmpeg release from johnvansickle
-          FFMPEG_URL=$(curl -s https://api.github.com/repos/johnvansickle/ffmpeg/releases/latest | grep -oP '"browser_download_url":.*?ffmpeg-release-amd64-static.tar.xz"' | head -1 | sed 's/"browser_download_url": "//;s/"$//')
+          # Get download URL using jq (reliable JSON parsing)
+          FFMPEG_URL=$(curl -s -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/johnvansickle/ffmpeg/releases/latest | \
+            jq -r '.assets[] | select(.name | test("ffmpeg-release-amd64-static.tar.xz$")) | .browser_download_url')
           
-          if [ -z "$FFMPEG_URL" ]; then
-            echo "Failed to get download URL"
-            if [ $i -lt $MAX_RETRIES ]; then
-              echo "Retrying in ${RETRY_DELAY}s..."
-              sleep $RETRY_DELAY
-              RETRY_DELAY=$((RETRY_DELAY * 2))
-              continue
-            else
-              exit 1
+          if [ -n "$FFMPEG_URL" ] && [ "$FFMPEG_URL" != "null" ]; then
+            echo "Found download URL: $FFMPEG_URL"
+            wget -q --show-progress "$FFMPEG_URL" -O ffmpeg.tar.xz
+            if [ $? -eq 0 ]; then
+              tar -xf ffmpeg.tar.xz
+              FFMPEG_DIR=$(tar -tf ffmpeg.tar.xz | head -1 | cut -d/ -f1)
+              sudo cp ${FFMPEG_DIR}/ffmpeg ${FFMPEG_DIR}/ffprobe /usr/local/bin/
+              rm -rf ffmpeg.tar.xz $FFMPEG_DIR
+              if command -v ffmpeg &> /dev/null; then
+                echo "FFmpeg installed successfully from static build"
+                ffmpeg -version | head -1
+                INSTALLED=1
+                break
+              fi
             fi
           fi
           
-          wget -q --show-progress "$FFMPEG_URL" -O ffmpeg.tar.xz
-          if [ $? -ne 0 ]; then
-            echo "Download failed"
-            if [ $i -lt $MAX_RETRIES ]; then
-              echo "Retrying in ${RETRY_DELAY}s..."
-              sleep $RETRY_DELAY
-              RETRY_DELAY=$((RETRY_DELAY * 2))
-              continue
-            else
-              exit 1
-            fi
-          fi
-          
-          tar -xf ffmpeg.tar.xz
-          FFMPEG_DIR=$(tar -tf ffmpeg.tar.xz | head -1 | cut -d/ -f1)
-          sudo cp ${FFMPEG_DIR}/ffmpeg ${FFMPEG_DIR}/ffprobe /usr/local/bin/
-          rm -rf ffmpeg.tar.xz $FFMPEG_DIR
-          
-          if command -v ffmpeg &> /dev/null; then
-            echo "FFmpeg installed successfully"
-            ffmpeg -version | head -1
-            break
-          else
-            echo "Installation verification failed"
-            if [ $i -lt $MAX_RETRIES ]; then
-              echo "Retrying..."
-              sleep $RETRY_DELAY
-              RETRY_DELAY=$((RETRY_DELAY * 2))
-            else
-              exit 1
-            fi
-          fi
+          echo "Static build download failed (attempt $i). Retrying in ${RETRY_DELAY}s..."
+          sleep $RETRY_DELAY
+          RETRY_DELAY=$((RETRY_DELAY * 2))
         done
+        
+        # Fallback to apt if static build fails after all retries
+        if [ $INSTALLED -eq 0 ]; then
+          echo "All static build attempts failed. Falling back to apt-get install..."
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          if command -v ffmpeg &> /dev/null; then
+            echo "FFmpeg installed successfully via apt"
+            ffmpeg -version | head -1
+          else
+            echo "ERROR: FFmpeg installation failed completely"
+            exit 1
+          fi
+        fi
 
     # ۴. نصب برق‌آسای ابزارهای دانلود مستقیماً از روی کش
     - name: Install yt-dlp and EJS challenge solver
