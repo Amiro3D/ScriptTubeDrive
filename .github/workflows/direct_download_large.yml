@@ -1,0 +1,101 @@
+name: Direct YouTube Download (Large Files)
+
+on:
+  repository_dispatch:
+    types: [direct_download_large]
+
+jobs:
+  download-and-send:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install yt-dlp and FFmpeg
+      run: |
+        sudo apt update
+        sudo apt install -y ffmpeg
+        pip install yt-dlp
+
+    - name: Download Telegram Local Bot API
+      run: |
+        wget -q "https://github.com/tdlib/telegram-bot-api/releases/download/v7.6.0/telegram-bot-api-linux.zip"
+        unzip -q telegram-bot-api-linux.zip
+        chmod +x telegram-bot-api
+
+    - name: Start Local Bot API
+      env:
+        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      run: |
+        ./telegram-bot-api --api-id=1 --api-hash="$(openssl rand -hex 32)" --local --http-port=8081 &
+        sleep 5
+
+    - name: Get video title
+      id: title
+      run: |
+        URL="${{ github.event.client_payload.url }}"
+        RAW_TITLE=$(yt-dlp --get-title "$URL" 2>/dev/null || echo "YouTube_Video")
+        SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | cut -c1-100)
+        echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
+        echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
+
+    - name: Download video
+      id: download
+      run: |
+        URL="${{ github.event.client_payload.url }}"
+        QUALITY="${{ github.event.client_payload.quality || '720' }}"
+        SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
+        
+        case "$QUALITY" in
+          "144")  F="-f bestvideo[height<=144]+bestaudio/best[height<=144]" ;;
+          "240")  F="-f bestvideo[height<=240]+bestaudio/best[height<=240]" ;;
+          "360")  F="-f bestvideo[height<=360]+bestaudio/best[height<=360]" ;;
+          "480")  F="-f bestvideo[height<=480]+bestaudio/best[height<=480]" ;;
+          "720")  F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
+          "1080") F="-f bestvideo[height<=1080]+bestaudio/best[height<=1080]" ;;
+          "best") F="--merge-output-format mp4" ;;
+          "audio") F="-x --audio-format mp3" ;;
+          *)      F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
+        esac
+        
+        yt-dlp $F --merge-output-format mp4 -o "${SAFE_TITLE}.%(ext)s" "$URL"
+        
+        if [ "$QUALITY" = "audio" ]; then
+          EXT="mp3"
+        else
+          EXT="mp4"
+        fi
+        FINAL_NAME="${SAFE_TITLE}.${EXT}"
+        echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+
+    - name: Send to Telegram via Local Bot API
+      env:
+        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        PROGRESS_MSG_ID: ${{ github.event.client_payload.progress_msg_id }}
+        TITLE: ${{ steps.title.outputs.raw_title }}
+      run: |
+        FILE="${{ steps.download.outputs.video_file }}"
+        EXT="${FILE##*.}"
+        
+        # Use local API on port 8081
+        API_URL="http://localhost:8081/bot${BOT_TOKEN}"
+        
+        if [ "$EXT" = "mp4" ]; then
+          curl -s -X POST "${API_URL}/sendVideo" \
+            -F chat_id="$CHAT_ID" \
+            -F video=@"$FILE" \
+            -F caption="🎬 *${TITLE}*" \
+            -F parse_mode="Markdown"
+        else
+          curl -s -X POST "${API_URL}/sendDocument" \
+            -F chat_id="$CHAT_ID" \
+            -F document=@"$FILE" \
+            -F caption="🎵 *${TITLE}*" \
+            -F parse_mode="Markdown"
+        fi
+        
+        # Delete progress message
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
+          -d chat_id="$CHAT_ID" \
+          -d message_id="$PROGRESS_MSG_ID"
