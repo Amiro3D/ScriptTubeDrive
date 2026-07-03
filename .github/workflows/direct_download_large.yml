@@ -27,7 +27,7 @@ jobs:
         sudo apt update
         sudo apt install -y ffmpeg
         pip install yt-dlp
-        # Install Deno for JavaScript runtime
+        # Deno for JS runtime
         curl -fsSL https://deno.land/install.sh | sh
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
@@ -36,8 +36,11 @@ jobs:
         docker run -d \
           --name telegram-bot-api \
           -p 8081:8081 \
+          -e TELEGRAM_API_ID=32919068 \
+          -e TELEGRAM_API_HASH="824126c0da44d9c3843ff18ba777e175" \
+          -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
           aiogram/telegram-bot-api:latest
-        # Wait for it to start
+        # Wait for the server to respond
         for i in {1..10}; do
           if curl -s http://localhost:8081/ping > /dev/null 2>&1; then
             echo "Telegram Bot API started."
@@ -106,7 +109,7 @@ jobs:
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
         EXT="${FILE##*.}"
-        # The Docker container uses the token in the URL path: http://localhost:8081/bot<TOKEN>/sendVideo
+        # Use the same token in the URL path (the container will accept it)
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
 
         echo "Sending file: $FILE"
