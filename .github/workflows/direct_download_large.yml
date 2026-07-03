@@ -22,23 +22,38 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ---------- Cache apt packages (to avoid re-downloading) ----------
-    - name: Cache apt archives
-      uses: actions/cache@v4
+    # ---------- Custom apt cache ----------
+    - name: Set up apt cache directory
+      run: |
+        mkdir -p ~/apt-cache/archives
+        mkdir -p ~/apt-cache/partial
+
+    - name: Cache apt packages
       id: apt-cache
+      uses: actions/cache@v4
       with:
-        path: /var/cache/apt/archives
+        path: ~/apt-cache
         key: ${{ runner.os }}-apt-${{ hashFiles('**/apt-packages.txt') }}
         restore-keys: |
           ${{ runner.os }}-apt-
 
-    # ---------- Install dependencies (only if cache miss) ----------
-    - name: Install FFmpeg and other dependencies
+    - name: Install ffmpeg using cached packages
       run: |
         sudo apt update
-        sudo apt install -y --no-install-recommends ffmpeg
+        # Install from cache if it exists, otherwise download and cache
+        if [ -d "$HOME/apt-cache/archives" ] && [ "$(ls -A $HOME/apt-cache/archives/*.deb 2>/dev/null)" ]; then
+          echo "Using cached apt packages"
+          sudo apt-get install -y --no-install-recommends \
+            -o dir::cache="$HOME/apt-cache" ffmpeg
+        else
+          echo "Downloading and caching ffmpeg packages"
+          sudo apt-get install -d -y --no-install-recommends \
+            -o dir::cache="$HOME/apt-cache" ffmpeg
+          sudo apt-get install -y --no-install-recommends \
+            -o dir::cache="$HOME/apt-cache" ffmpeg
+        fi
 
-    # ---------- Cache pip packages (yt-dlp) ----------
+    # ---------- Cache pip and Deno (unchanged) ----------
     - name: Cache pip packages
       uses: actions/cache@v4
       id: pip-cache
@@ -48,7 +63,6 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-ytdlp-
 
-    # ---------- Cache Deno ----------
     - name: Cache Deno
       uses: actions/cache@v4
       id: deno-cache
@@ -58,13 +72,9 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-deno-
 
-    # ---------- Install yt-dlp and Deno (if not cached) ----------
     - name: Install yt-dlp and Deno
       run: |
-        # pip install yt-dlp (cached)
         pip install yt-dlp
-        
-        # Install Deno only if not in cache
         if [ ! -f "$HOME/.deno/bin/deno" ]; then
           echo "Deno not in cache, installing..."
           curl -fsSL https://deno.land/install.sh | sh
@@ -73,7 +83,7 @@ jobs:
         fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
-    # ---------- Run Telegram Bot API via Docker ----------
+    # ---------- Docker (unchanged) ----------
     - name: Run Telegram Bot API via Docker
       run: |
         docker run -d \
@@ -97,7 +107,7 @@ jobs:
           exit 1
         fi
 
-    # ---------- Get video title ----------
+    # ---------- Video download and upload (unchanged) ----------
     - name: Get video title
       id: title
       run: |
@@ -107,7 +117,6 @@ jobs:
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
 
-    # ---------- Download video ----------
     - name: Download video
       id: download
       run: |
@@ -142,7 +151,6 @@ jobs:
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
-    # ---------- Send to Telegram ----------
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
