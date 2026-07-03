@@ -28,32 +28,67 @@ jobs:
         sudo apt install -y ffmpeg unzip
         pip install yt-dlp
         
-        # Install Deno (JavaScript runtime for yt-dlp)
+        # Install Deno for JavaScript runtime
         curl -fsSL https://deno.land/install.sh | sh
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
     - name: Download Telegram Bot API binary
       run: |
         LATEST_TAG=$(curl -s https://api.github.com/repos/tdlib/telegram-bot-api/releases/latest | jq -r .tag_name)
+        echo "Downloading tag: $LATEST_TAG"
         curl -L -o telegram-bot-api \
           "https://github.com/tdlib/telegram-bot-api/releases/download/${LATEST_TAG}/telegram-bot-api-linux-amd64"
         chmod +x telegram-bot-api
         file telegram-bot-api
+        ./telegram-bot-api --help | head -5 || echo "Binary help check failed"
 
     - name: Start Local Bot API
       run: |
-        ./telegram-bot-api \
+        # Kill any existing processes
+        pkill -f telegram-bot-api || true
+        
+        # Create directory for logs
+        mkdir -p ./bot_data
+        
+        # Start the server with explicit port and logging
+        nohup ./telegram-bot-api \
           --api-id=32919068 \
           --api-hash="824126c0da44d9c3843ff18ba777e175" \
           --local \
-          --http-port=8081 &
-        sleep 5
+          --http-port=8081 \
+          --dir=./bot_data \
+          > ./bot_data/bot.log 2>&1 &
+        
+        # Wait for server to start
+        echo "Waiting for Local Bot API to start..."
+        for i in {1..30}; do
+          if curl -s http://localhost:8081/ping > /dev/null 2>&1; then
+            echo "Local Bot API started successfully"
+            break
+          fi
+          echo "Attempt $i: Still waiting..."
+          sleep 1
+        done
+        
+        # Show logs if it failed
+        if ! curl -s http://localhost:8081/ping > /dev/null 2>&1; then
+          echo "ERROR: Local Bot API failed to start. Logs:"
+          cat ./bot_data/bot.log 2>/dev/null || echo "No log file found"
+          exit 1
+        fi
+
+    - name: Debug - Check Local Bot API
+      run: |
+        echo "Checking Local Bot API..."
+        curl -s http://localhost:8081/ping || echo "Ping failed"
+        echo "Bot log:"
+        cat ./bot_data/bot.log || echo "No log"
 
     - name: Get video title
       id: title
       run: |
         URL="${{ github.event.client_payload.url }}"
-        RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
+        RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt --js-runtimes deno --remote-components ejs:github 2>/dev/null || echo "YouTube_Video")
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | cut -c1-100)
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
@@ -77,7 +112,6 @@ jobs:
           *)      F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
         
-        # 🔑 Added Deno runtime and remote components
         yt-dlp $F \
           --merge-output-format mp4 \
           --cookies cookies.txt \
@@ -93,6 +127,12 @@ jobs:
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
+    - name: Debug - List downloaded files
+      run: |
+        echo "Files in directory:"
+        ls -la
+        echo "Video file: ${{ steps.download.outputs.video_file }}"
+
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -105,37 +145,55 @@ jobs:
         FILE="${{ steps.download.outputs.video_file }}"
         EXT="${FILE##*.}"
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
-
+        
+        echo "Sending file: $FILE"
+        echo "API URL: $API_URL"
+        
+        # Test connection first
+        echo "Testing connection to Local Bot API..."
+        curl -s http://localhost:8081/ping || echo "Ping failed!"
+        
+        # Send video/audio
         if [ "$EXT" = "mp4" ]; then
           RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
             -F chat_id="$CHAT_ID" \
             -F video=@"$FILE" \
             -F caption="🎬 *${TITLE}*" \
-            -F parse_mode="Markdown")
+            -F parse_mode="Markdown" 2>&1)
         else
           RESP=$(curl -s -X POST "${API_URL}/sendDocument" \
             -F chat_id="$CHAT_ID" \
             -F document=@"$FILE" \
             -F caption="🎵 *${TITLE}*" \
-            -F parse_mode="Markdown")
+            -F parse_mode="Markdown" 2>&1)
         fi
-
-        MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
-        echo "Sent file, message ID: $MSG_ID"
-
-        if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
-          if [ -n "$THUMB_MSG_ID" ]; then
+        
+        echo "Response: $RESP"
+        
+        # Check if response contains a message_id
+        MSG_ID=$(echo "$RESP" | jq -r '.result.message_id // ""')
+        if [ -n "$MSG_ID" ] && [ "$MSG_ID" != "null" ]; then
+          echo "Sent file, message ID: $MSG_ID"
+          
+          # Forward to group if provided
+          if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
+            if [ -n "$THUMB_MSG_ID" ]; then
+              curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
+                -d chat_id="$GROUP_CHAT_ID" \
+                -d from_chat_id="$CHAT_ID" \
+                -d message_id="$THUMB_MSG_ID"
+            fi
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
               -d chat_id="$GROUP_CHAT_ID" \
               -d from_chat_id="$CHAT_ID" \
-              -d message_id="$THUMB_MSG_ID"
+              -d message_id="$MSG_ID"
           fi
-          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
-            -d chat_id="$GROUP_CHAT_ID" \
-            -d from_chat_id="$CHAT_ID" \
-            -d message_id="$MSG_ID"
+          
+          # Delete progress message
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
+            -d chat_id="$CHAT_ID" \
+            -d message_id="$PROGRESS_MSG_ID"
+        else
+          echo "ERROR: Failed to send file. Response: $RESP"
+          exit 1
         fi
-
-        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
-          -d chat_id="$CHAT_ID" \
-          -d message_id="$PROGRESS_MSG_ID"
