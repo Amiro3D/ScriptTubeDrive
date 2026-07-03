@@ -28,19 +28,15 @@ jobs:
         sudo apt install -y ffmpeg
         pip install yt-dlp
 
-    # 1. Download the official pre-built binary of Telegram Local Bot API
+    # Download the official pre-built binary
     - name: Download Telegram Bot API binary
       run: |
-        # Get the latest release tag
         LATEST_TAG=$(curl -s https://api.github.com/repos/tdlib/telegram-bot-api/releases/latest | jq -r .tag_name)
-        # Download the Linux amd64 binary (not .zip)
         curl -L -o telegram-bot-api \
           "https://github.com/tdlib/telegram-bot-api/releases/download/${LATEST_TAG}/telegram-bot-api-linux-amd64"
         chmod +x telegram-bot-api
-        # Verify it's a valid executable
         file telegram-bot-api
 
-    # 2. Start the Local Bot API in background
     - name: Start Local Bot API
       run: |
         ./telegram-bot-api \
@@ -50,17 +46,15 @@ jobs:
           --http-port=8081 &
         sleep 5
 
-    # 3. Get video title
     - name: Get video title
       id: title
       run: |
         URL="${{ github.event.client_payload.url }}"
-        RAW_TITLE=$(yt-dlp --get-title "$URL" 2>/dev/null || echo "YouTube_Video")
+        RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt 2>/dev/null || echo "YouTube_Video")
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | cut -c1-100)
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
 
-    # 4. Download video with yt-dlp
     - name: Download video
       id: download
       run: |
@@ -80,7 +74,11 @@ jobs:
           *)      F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
         
-        yt-dlp $F --merge-output-format mp4 -o "${SAFE_TITLE}.%(ext)s" "$URL"
+        # 🔑 Added --cookies cookies.txt here!
+        yt-dlp $F \
+          --merge-output-format mp4 \
+          --cookies cookies.txt \
+          -o "${SAFE_TITLE}.%(ext)s" "$URL"
         
         if [ "$QUALITY" = "audio" ]; then
           EXT="mp3"
@@ -90,7 +88,6 @@ jobs:
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
-    # 5. Send to Telegram
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -104,7 +101,6 @@ jobs:
         EXT="${FILE##*.}"
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
 
-        # Send video/audio
         if [ "$EXT" = "mp4" ]; then
           RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
             -F chat_id="$CHAT_ID" \
@@ -122,7 +118,6 @@ jobs:
         MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
         echo "Sent file, message ID: $MSG_ID"
 
-        # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
           if [ -n "$THUMB_MSG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
@@ -136,7 +131,6 @@ jobs:
             -d message_id="$MSG_ID"
         fi
 
-        # Delete progress message
         curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
           -d chat_id="$CHAT_ID" \
           -d message_id="$PROGRESS_MSG_ID"
