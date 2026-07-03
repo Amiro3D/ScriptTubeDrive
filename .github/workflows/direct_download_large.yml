@@ -28,8 +28,17 @@ jobs:
 
     - name: Download Telegram Local Bot API (latest)
       run: |
-        curl -L -o telegram-bot-api-linux.zip \
-          "https://github.com/tdlib/telegram-bot-api/releases/latest/download/telegram-bot-api-linux.zip"
+        # Get the download URL for the latest release's linux zip
+        LATEST_URL=$(curl -s https://api.github.com/repos/tdlib/telegram-bot-api/releases/latest \
+          | grep -o 'https://[^"]*telegram-bot-api-linux.zip' | head -1)
+        if [ -z "$LATEST_URL" ]; then
+          # Fallback to a known version if API fails
+          LATEST_URL="https://github.com/tdlib/telegram-bot-api/releases/download/v7.10.0/telegram-bot-api-linux.zip"
+        fi
+        echo "Downloading from: $LATEST_URL"
+        curl -L -o telegram-bot-api-linux.zip "$LATEST_URL"
+        # Check if it's a zip file
+        file telegram-bot-api-linux.zip
         unzip -q telegram-bot-api-linux.zip
         chmod +x telegram-bot-api
 
@@ -93,6 +102,7 @@ jobs:
         EXT="${FILE##*.}"
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
         
+        # Send to user
         if [ "$EXT" = "mp4" ]; then
           RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
             -F chat_id="$CHAT_ID" \
@@ -108,7 +118,9 @@ jobs:
         fi
         
         MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
+        echo "Sent file, message ID: $MSG_ID"
         
+        # Forward to group if set
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
           if [ -n "$THUMB_MSG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
@@ -122,6 +134,7 @@ jobs:
             -d message_id="$MSG_ID"
         fi
         
+        # Delete progress message
         curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
           -d chat_id="$CHAT_ID" \
           -d message_id="$PROGRESS_MSG_ID"
