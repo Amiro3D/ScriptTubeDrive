@@ -16,80 +16,39 @@ on:
 jobs:
   download-and-send:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Install yt-dlp, FFmpeg, Deno, and build tools
+    - name: Install yt-dlp, FFmpeg, and Deno
       run: |
         sudo apt update
-        sudo apt install -y ffmpeg unzip git make g++ libssl-dev zlib1g-dev cmake
+        sudo apt install -y ffmpeg
         pip install yt-dlp
+        # Install Deno for JavaScript runtime
         curl -fsSL https://deno.land/install.sh | sh
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
-    # ----- Download Telegram Bot API binary (specific version) -----
-    - name: Download Telegram Bot API binary (v7.10.0)
-      id: download_binary
+    - name: Run Telegram Bot API via Docker
       run: |
-        VERSION="v7.10.0"
-        URL="https://github.com/tdlib/telegram-bot-api/releases/download/${VERSION}/telegram-bot-api-linux-amd64"
-        echo "Downloading from: $URL"
-        curl -L -o telegram-bot-api "$URL"
-        if file telegram-bot-api | grep -q "ELF 64-bit LSB executable"; then
-          chmod +x telegram-bot-api
-          echo "Binary download successful."
-          echo "binary_ok=true" >> $GITHUB_OUTPUT
-        else
-          echo "Binary download failed (not an ELF file). Falling back to source build."
-          echo "binary_ok=false" >> $GITHUB_OUTPUT
-          # Remove the invalid file so it doesn't interfere with git clone
-          rm -f telegram-bot-api
-        fi
-
-    # ----- Fallback: Build from source if binary failed -----
-    - name: Build Telegram Bot API from source (fallback)
-      if: steps.download_binary.outputs.binary_ok != 'true'
-      run: |
-        # Clone to a new directory to avoid conflict with existing file/dir
-        git clone --recursive https://github.com/tdlib/telegram-bot-api.git telegram-bot-api-src
-        cd telegram-bot-api-src
-        mkdir build && cd build
-        cmake -DCMAKE_BUILD_TYPE=Release ..
-        make -j$(nproc)
-        sudo cp telegram-bot-api /usr/local/bin/
-        # Verify it's installed
-        which telegram-bot-api || echo "Installation failed"
-        echo "BINARY_PATH=/usr/local/bin/telegram-bot-api" >> $GITHUB_ENV
-
-    - name: Set binary path (for binary download)
-      if: steps.download_binary.outputs.binary_ok == 'true'
-      run: echo "BINARY_PATH=./telegram-bot-api" >> $GITHUB_ENV
-
-    - name: Start Local Bot API
-      run: |
-        pkill -f telegram-bot-api || true
-        mkdir -p ./bot_data
-        nohup $BINARY_PATH \
-          --api-id=32919068 \
-          --api-hash="824126c0da44d9c3843ff18ba777e175" \
-          --local \
-          --http-port=8081 \
-          --dir=./bot_data \
-          > ./bot_data/bot.log 2>&1 &
-        for i in {1..15}; do
+        docker run -d \
+          --name telegram-bot-api \
+          -p 8081:8081 \
+          aiogram/telegram-bot-api:latest
+        # Wait for it to start
+        for i in {1..10}; do
           if curl -s http://localhost:8081/ping > /dev/null 2>&1; then
-            echo "Local Bot API started."
+            echo "Telegram Bot API started."
             break
           fi
           echo "Waiting... ($i)"
-          sleep 1
+          sleep 2
         done
         if ! curl -s http://localhost:8081/ping > /dev/null 2>&1; then
-          echo "ERROR: Local Bot API failed to start. Log:"
-          cat ./bot_data/bot.log
+          echo "ERROR: Failed to start Telegram Bot API via Docker."
+          docker logs telegram-bot-api
           exit 1
         fi
 
@@ -147,9 +106,11 @@ jobs:
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
         EXT="${FILE##*.}"
+        # The Docker container uses the token in the URL path: http://localhost:8081/bot<TOKEN>/sendVideo
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
 
         echo "Sending file: $FILE"
+
         if [ "$EXT" = "mp4" ]; then
           RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
             -F chat_id="$CHAT_ID" \
@@ -165,11 +126,15 @@ jobs:
         fi
 
         MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
+        echo "Response: $RESP"
         if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
           echo "ERROR: Failed to send file. Response: $RESP"
           exit 1
         fi
 
+        echo "Sent file, message ID: $MSG_ID"
+
+        # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
           if [ -n "$THUMB_MSG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
@@ -183,6 +148,7 @@ jobs:
             -d message_id="$MSG_ID"
         fi
 
+        # Delete progress message
         curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
           -d chat_id="$CHAT_ID" \
           -d message_id="$PROGRESS_MSG_ID"
