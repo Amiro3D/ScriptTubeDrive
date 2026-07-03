@@ -22,17 +22,34 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ---------- Caching ----------
-    - name: Cache pip packages (yt-dlp)
+    # ---------- Cache apt packages (to avoid re-downloading) ----------
+    - name: Cache apt archives
+      uses: actions/cache@v4
+      id: apt-cache
+      with:
+        path: /var/cache/apt/archives
+        key: ${{ runner.os }}-apt-${{ hashFiles('**/apt-packages.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-apt-
+
+    # ---------- Install dependencies (only if cache miss) ----------
+    - name: Install FFmpeg and other dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y --no-install-recommends ffmpeg
+
+    # ---------- Cache pip packages (yt-dlp) ----------
+    - name: Cache pip packages
       uses: actions/cache@v4
       id: pip-cache
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-ytdlp-v1
+        key: ${{ runner.os }}-pip-ytdlp-v2
         restore-keys: |
           ${{ runner.os }}-pip-ytdlp-
 
-    - name: Cache Deno installation
+    # ---------- Cache Deno ----------
+    - name: Cache Deno
       uses: actions/cache@v4
       id: deno-cache
       with:
@@ -41,25 +58,22 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-deno-
 
-    # ---------- Install tools ----------
-    - name: Install FFmpeg, yt-dlp, and Deno (cached)
+    # ---------- Install yt-dlp and Deno (if not cached) ----------
+    - name: Install yt-dlp and Deno
       run: |
-        sudo apt update
-        sudo apt install -y ffmpeg
-        
-        # Install yt-dlp (pip cache will speed up)
+        # pip install yt-dlp (cached)
         pip install yt-dlp
         
-        # Install Deno only if not cached
+        # Install Deno only if not in cache
         if [ ! -f "$HOME/.deno/bin/deno" ]; then
-          echo "Deno not found in cache, installing..."
+          echo "Deno not in cache, installing..."
           curl -fsSL https://deno.land/install.sh | sh
         else
-          echo "Deno found in cache, skipping installation."
+          echo "Deno found in cache, skipping install."
         fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
-    # ---------- Run Docker container ----------
+    # ---------- Run Telegram Bot API via Docker ----------
     - name: Run Telegram Bot API via Docker
       run: |
         docker run -d \
@@ -83,7 +97,7 @@ jobs:
           exit 1
         fi
 
-    # ---------- Download video ----------
+    # ---------- Get video title ----------
     - name: Get video title
       id: title
       run: |
@@ -93,6 +107,7 @@ jobs:
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
 
+    # ---------- Download video ----------
     - name: Download video
       id: download
       run: |
@@ -166,7 +181,6 @@ jobs:
 
         echo "Sent file, message ID: $MSG_ID"
 
-        # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
           if [ -n "$THUMB_MSG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
@@ -180,7 +194,6 @@ jobs:
             -d message_id="$MSG_ID"
         fi
 
-        # Delete progress message
         curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
           -d chat_id="$CHAT_ID" \
           -d message_id="$PROGRESS_MSG_ID"
