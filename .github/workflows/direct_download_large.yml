@@ -26,15 +26,15 @@ jobs:
         sudo apt install -y ffmpeg
         pip install yt-dlp
 
-    - name: Download Telegram Local Bot API
+    - name: Download Telegram Local Bot API (latest)
       run: |
-        wget -q "https://github.com/tdlib/telegram-bot-api/releases/download/v7.6.0/telegram-bot-api-linux.zip"
+        curl -L -o telegram-bot-api-linux.zip \
+          "https://github.com/tdlib/telegram-bot-api/releases/latest/download/telegram-bot-api-linux.zip"
         unzip -q telegram-bot-api-linux.zip
         chmod +x telegram-bot-api
 
     - name: Start Local Bot API
       run: |
-        # Use your actual api_id and api_hash here
         ./telegram-bot-api \
           --api-id=32919068 \
           --api-hash="824126c0da44d9c3843ff18ba777e175" \
@@ -45,7 +45,7 @@ jobs:
     - name: Get video title
       id: title
       run: |
-        URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
+        URL="${{ github.event.client_payload.url }}"
         RAW_TITLE=$(yt-dlp --get-title "$URL" 2>/dev/null || echo "YouTube_Video")
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | cut -c1-100)
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
@@ -54,8 +54,8 @@ jobs:
     - name: Download video
       id: download
       run: |
-        URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
-        QUALITY="${{ github.event.client_payload.quality || github.event.inputs.quality || '720' }}"
+        URL="${{ github.event.client_payload.url }}"
+        QUALITY="${{ github.event.client_payload.quality || '720' }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
         
         case "$QUALITY" in
@@ -87,12 +87,12 @@ jobs:
         PROGRESS_MSG_ID: ${{ github.event.client_payload.progress_msg_id }}
         TITLE: ${{ steps.title.outputs.raw_title }}
         GROUP_CHAT_ID: ${{ github.event.client_payload.group_chat_id || '' }}
+        THUMB_MSG_ID: ${{ github.event.client_payload.thumbnail_msg_id || '' }}
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
         EXT="${FILE##*.}"
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
         
-        # Upload to the user
         if [ "$EXT" = "mp4" ]; then
           RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
             -F chat_id="$CHAT_ID" \
@@ -107,17 +107,14 @@ jobs:
             -F parse_mode="Markdown")
         fi
         
-        # Extract message IDs for forwarding
         MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
-        PHOTO_MSG_ID="${{ github.event.client_payload.thumbnail_msg_id }}"
         
-        # If group chat ID is provided, forward both thumbnail and video
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
-          if [ -n "$PHOTO_MSG_ID" ]; then
+          if [ -n "$THUMB_MSG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
               -d chat_id="$GROUP_CHAT_ID" \
               -d from_chat_id="$CHAT_ID" \
-              -d message_id="$PHOTO_MSG_ID"
+              -d message_id="$THUMB_MSG_ID"
           fi
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
             -d chat_id="$GROUP_CHAT_ID" \
@@ -125,7 +122,6 @@ jobs:
             -d message_id="$MSG_ID"
         fi
         
-        # Delete progress message
         curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
           -d chat_id="$CHAT_ID" \
           -d message_id="$PROGRESS_MSG_ID"
