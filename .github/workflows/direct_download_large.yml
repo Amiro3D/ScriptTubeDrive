@@ -16,43 +16,41 @@ on:
 jobs:
   download-and-send:
     runs-on: ubuntu-latest
-    timeout-minutes: 15   # allow extra time for compilation
+    timeout-minutes: 10
 
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
 
-    # ---------- Install dependencies ----------
     - name: Install yt-dlp and FFmpeg
       run: |
         sudo apt update
         sudo apt install -y ffmpeg
         pip install yt-dlp
 
-    # ---------- Build Local Bot API from source ----------
-    - name: Build Telegram Local Bot API
+    # 1. Download the official pre-built binary of Telegram Local Bot API
+    - name: Download Telegram Bot API binary
       run: |
-        sudo apt update
-        sudo apt install -y git make g++ libssl-dev zlib1g-dev cmake
-        git clone --recursive https://github.com/tdlib/telegram-bot-api.git
-        cd telegram-bot-api
-        mkdir build && cd build
-        cmake -DCMAKE_BUILD_TYPE=Release ..
-        make -j$(nproc)
-        sudo cp telegram-bot-api /usr/local/bin/
+        # Get the latest release tag
+        LATEST_TAG=$(curl -s https://api.github.com/repos/tdlib/telegram-bot-api/releases/latest | jq -r .tag_name)
+        # Download the Linux amd64 binary (not .zip)
+        curl -L -o telegram-bot-api \
+          "https://github.com/tdlib/telegram-bot-api/releases/download/${LATEST_TAG}/telegram-bot-api-linux-amd64"
+        chmod +x telegram-bot-api
+        # Verify it's a valid executable
+        file telegram-bot-api
 
-    # ---------- Start the Local Bot API in background ----------
+    # 2. Start the Local Bot API in background
     - name: Start Local Bot API
       run: |
-        # Replace with your own api_id and api_hash if needed
-        telegram-bot-api \
+        ./telegram-bot-api \
           --api-id=32919068 \
           --api-hash="824126c0da44d9c3843ff18ba777e175" \
           --local \
           --http-port=8081 &
         sleep 5
 
-    # ---------- Get video title ----------
+    # 3. Get video title
     - name: Get video title
       id: title
       run: |
@@ -62,7 +60,7 @@ jobs:
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
 
-    # ---------- Download video ----------
+    # 4. Download video with yt-dlp
     - name: Download video
       id: download
       run: |
@@ -92,7 +90,7 @@ jobs:
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
-    # ---------- Send to Telegram via Local Bot API ----------
+    # 5. Send to Telegram
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -106,7 +104,7 @@ jobs:
         EXT="${FILE##*.}"
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
 
-        # 1. Send the video/audio to the user
+        # Send video/audio
         if [ "$EXT" = "mp4" ]; then
           RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
             -F chat_id="$CHAT_ID" \
@@ -121,27 +119,24 @@ jobs:
             -F parse_mode="Markdown")
         fi
 
-        # Extract the message ID of the sent file
         MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
         echo "Sent file, message ID: $MSG_ID"
 
-        # 2. Forward to the group if GROUP_CHAT_ID is provided
+        # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
-          # Forward thumbnail (if we have its ID)
           if [ -n "$THUMB_MSG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
               -d chat_id="$GROUP_CHAT_ID" \
               -d from_chat_id="$CHAT_ID" \
               -d message_id="$THUMB_MSG_ID"
           fi
-          # Forward the video/document
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
             -d chat_id="$GROUP_CHAT_ID" \
             -d from_chat_id="$CHAT_ID" \
             -d message_id="$MSG_ID"
         fi
 
-        # 3. Delete the progress message (sent by the worker)
+        # Delete progress message
         curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
           -d chat_id="$CHAT_ID" \
           -d message_id="$PROGRESS_MSG_ID"
