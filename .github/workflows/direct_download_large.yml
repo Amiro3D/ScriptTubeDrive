@@ -22,13 +22,16 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Install yt-dlp and FFmpeg
+    - name: Install yt-dlp, FFmpeg, and Deno
       run: |
         sudo apt update
-        sudo apt install -y ffmpeg
+        sudo apt install -y ffmpeg unzip
         pip install yt-dlp
+        
+        # Install Deno (JavaScript runtime for yt-dlp)
+        curl -fsSL https://deno.land/install.sh | sh
+        echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
-    # Download the official pre-built binary
     - name: Download Telegram Bot API binary
       run: |
         LATEST_TAG=$(curl -s https://api.github.com/repos/tdlib/telegram-bot-api/releases/latest | jq -r .tag_name)
@@ -74,10 +77,12 @@ jobs:
           *)      F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
         
-        # 🔑 Added --cookies cookies.txt here!
+        # 🔑 Added Deno runtime and remote components
         yt-dlp $F \
           --merge-output-format mp4 \
           --cookies cookies.txt \
+          --js-runtimes deno \
+          --remote-components ejs:github \
           -o "${SAFE_TITLE}.%(ext)s" "$URL"
         
         if [ "$QUALITY" = "audio" ]; then
