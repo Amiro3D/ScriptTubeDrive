@@ -22,15 +22,44 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Install yt-dlp, FFmpeg, and Deno
+    # ---------- Caching ----------
+    - name: Cache pip packages (yt-dlp)
+      uses: actions/cache@v4
+      id: pip-cache
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-ytdlp-v1
+        restore-keys: |
+          ${{ runner.os }}-pip-ytdlp-
+
+    - name: Cache Deno installation
+      uses: actions/cache@v4
+      id: deno-cache
+      with:
+        path: ~/.deno
+        key: ${{ runner.os }}-deno-v1
+        restore-keys: |
+          ${{ runner.os }}-deno-
+
+    # ---------- Install tools ----------
+    - name: Install FFmpeg, yt-dlp, and Deno (cached)
       run: |
         sudo apt update
         sudo apt install -y ffmpeg
+        
+        # Install yt-dlp (pip cache will speed up)
         pip install yt-dlp
-        # Deno for JS runtime
-        curl -fsSL https://deno.land/install.sh | sh
+        
+        # Install Deno only if not cached
+        if [ ! -f "$HOME/.deno/bin/deno" ]; then
+          echo "Deno not found in cache, installing..."
+          curl -fsSL https://deno.land/install.sh | sh
+        else
+          echo "Deno found in cache, skipping installation."
+        fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
+    # ---------- Run Docker container ----------
     - name: Run Telegram Bot API via Docker
       run: |
         docker run -d \
@@ -40,7 +69,6 @@ jobs:
           -e TELEGRAM_API_HASH="824126c0da44d9c3843ff18ba777e175" \
           -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
           aiogram/telegram-bot-api:latest
-        # Wait for the server to respond
         for i in {1..10}; do
           if curl -s http://localhost:8081/ping > /dev/null 2>&1; then
             echo "Telegram Bot API started."
@@ -55,6 +83,7 @@ jobs:
           exit 1
         fi
 
+    # ---------- Download video ----------
     - name: Get video title
       id: title
       run: |
@@ -98,6 +127,7 @@ jobs:
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
+    # ---------- Send to Telegram ----------
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -109,7 +139,6 @@ jobs:
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
         EXT="${FILE##*.}"
-        # Use the same token in the URL path (the container will accept it)
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
 
         echo "Sending file: $FILE"
