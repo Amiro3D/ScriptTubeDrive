@@ -22,38 +22,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ---------- Custom apt cache ----------
-    - name: Set up apt cache directory
-      run: |
-        mkdir -p ~/apt-cache/archives
-        mkdir -p ~/apt-cache/partial
-
-    - name: Cache apt packages
-      id: apt-cache
-      uses: actions/cache@v4
-      with:
-        path: ~/apt-cache
-        key: ${{ runner.os }}-apt-${{ hashFiles('**/apt-packages.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-apt-
-
-    - name: Install ffmpeg using cached packages
-      run: |
-        sudo apt update
-        # Install from cache if it exists, otherwise download and cache
-        if [ -d "$HOME/apt-cache/archives" ] && [ "$(ls -A $HOME/apt-cache/archives/*.deb 2>/dev/null)" ]; then
-          echo "Using cached apt packages"
-          sudo apt-get install -y --no-install-recommends \
-            -o dir::cache="$HOME/apt-cache" ffmpeg
-        else
-          echo "Downloading and caching ffmpeg packages"
-          sudo apt-get install -d -y --no-install-recommends \
-            -o dir::cache="$HOME/apt-cache" ffmpeg
-          sudo apt-get install -y --no-install-recommends \
-            -o dir::cache="$HOME/apt-cache" ffmpeg
-        fi
-
-    # ---------- Cache pip and Deno (unchanged) ----------
+    # ---------- Cache pip and Deno (fast) ----------
     - name: Cache pip packages
       uses: actions/cache@v4
       id: pip-cache
@@ -72,6 +41,7 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-deno-
 
+    # ---------- Install yt-dlp and Deno ----------
     - name: Install yt-dlp and Deno
       run: |
         pip install yt-dlp
@@ -83,7 +53,17 @@ jobs:
         fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
-    # ---------- Docker (unchanged) ----------
+    # ---------- Install FFmpeg only if missing ----------
+    - name: Install FFmpeg (if not present)
+      run: |
+        if command -v ffmpeg &> /dev/null; then
+          echo "FFmpeg is already installed, skipping."
+        else
+          sudo apt update
+          sudo apt install -y --no-install-recommends ffmpeg
+        fi
+
+    # ---------- Run Telegram Bot API via Docker ----------
     - name: Run Telegram Bot API via Docker
       run: |
         docker run -d \
@@ -107,7 +87,7 @@ jobs:
           exit 1
         fi
 
-    # ---------- Video download and upload (unchanged) ----------
+    # ---------- Get video title ----------
     - name: Get video title
       id: title
       run: |
@@ -117,6 +97,7 @@ jobs:
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
 
+    # ---------- Download video ----------
     - name: Download video
       id: download
       run: |
@@ -151,6 +132,7 @@ jobs:
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
+    # ---------- Send to Telegram ----------
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
