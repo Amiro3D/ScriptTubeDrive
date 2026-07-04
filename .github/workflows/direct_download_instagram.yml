@@ -247,7 +247,7 @@ jobs:
           fi
           MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
         elif [ "$FILE_TOTAL" -gt 1 ]; then
-          # Multiple files - send as media group using python3
+          # Multiple files - send as media group using python3 helper
           MEDIA_JSON="["
           FIRST=true
           for f in "${MEDIA_FILES[@]}"; do
@@ -261,22 +261,30 @@ jobs:
           done
           MEDIA_JSON+="]"
 
-          # Use python3 to call curl (avoids all shell quoting issues)
-          RESP=$(python3 -c "
-import subprocess, json, sys
-media_json = sys.argv[1]
-chat_id = sys.argv[2]
-bot_token = sys.argv[3]
-files = sys.argv[4:]
-cmd = ['curl', '-s', '-X', 'POST', f'http://localhost:8081/bot{bot_token}/sendMediaGroup',
-       '-F', f'chat_id={chat_id}']
-for f in files:
-    cmd.extend(['-F', f'media=@{f}'])
-cmd.extend(['-F', f'media={media_json}'])
-result = subprocess.run(cmd, capture_output=True, text=True)
-print(result.stdout)
-" "$MEDIA_JSON" "$CHAT_ID" "$BOT_TOKEN" "${MEDIA_FILES[@]}")
+          # Write python helper script
+          python3 -c "
+import sys
+lines = [
+    'import subprocess, sys',
+    'media_json = sys.argv[1]',
+    'chat_id = sys.argv[2]',
+    'bot_token = sys.argv[3]',
+    'files = sys.argv[4:]',
+    'cmd = [\"curl\", \"-s\", \"-X\", \"POST\",',
+    '       f\"http://localhost:8081/bot{bot_token}/sendMediaGroup\",',
+    '       \"-F\", f\"chat_id={chat_id}\"]',
+    'for f in files:',
+    '    cmd.extend([\"-F\", f\"media=@{f}\"])',
+    'cmd.extend([\"-F\", f\"media={media_json}\"])',
+    'r = subprocess.run(cmd, capture_output=True, text=True)',
+    'print(r.stdout)',
+]
+with open('/tmp/send_album.py', 'w') as fp:
+    fp.write('\n'.join(lines))
+"
 
+          RESP=$(python3 /tmp/send_album.py "$MEDIA_JSON" "$CHAT_ID" "$BOT_TOKEN" "${MEDIA_FILES[@]}")
+          rm -f /tmp/send_album.py
           echo "sendMediaGroup response: $RESP"
           MSG_ID=$(echo "$RESP" | jq -r '.result[0].message_id')
         fi
