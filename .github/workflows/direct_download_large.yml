@@ -40,6 +40,10 @@ jobs:
     # ---------- Install tools ----------
     - name: Install tools
       run: |
+        # FFmpeg (if not already installed)
+        if ! command -v ffmpeg &> /dev/null; then
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        fi
         # yt-dlp standalone binary (no pip needed)
         if [ ! -f /usr/local/bin/yt-dlp ]; then
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
