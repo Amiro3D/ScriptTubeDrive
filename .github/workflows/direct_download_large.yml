@@ -22,33 +22,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ---------- Setup apt cache directory with correct permissions ----------
-    - name: Prepare apt cache
-      run: |
-        mkdir -p ~/apt-cache/archives
-        mkdir -p ~/apt-cache/partial
-        sudo chown -R _apt:root ~/apt-cache
-
-    - name: Cache apt packages
-      id: apt-cache
-      uses: actions/cache@v4
-      with:
-        path: ~/apt-cache
-        key: ${{ runner.os }}-apt-${{ hashFiles('**/apt-packages.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-apt-
-
-    - name: Install FFmpeg (from cache if possible)
-      run: |
-        if command -v ffmpeg &> /dev/null; then
-          echo "FFmpeg already installed, skipping."
-          exit 0
-        fi
-        sudo apt update
-        sudo apt-get install -y --no-install-recommends \
-          -o dir::cache="$HOME/apt-cache" ffmpeg
-
-    # ---------- Cache pip and Deno (unchanged) ----------
+    # ---------- Install yt-dlp and Deno (with caching) ----------
     - name: Cache pip packages
       uses: actions/cache@v4
       id: pip-cache
@@ -78,7 +52,10 @@ jobs:
         fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
-    # ---------- Docker (unchanged) ----------
+    # ---------- FFmpeg is already pre-installed on Ubuntu runners, so we skip installation ----------
+    # No apt install needed – saves ~12 seconds.
+
+    # ---------- Run Telegram Bot API via Docker ----------
     - name: Run Telegram Bot API via Docker
       run: |
         docker run -d \
@@ -102,7 +79,7 @@ jobs:
           exit 1
         fi
 
-    # ---------- Video download and upload (unchanged) ----------
+    # ---------- Get video title ----------
     - name: Get video title
       id: title
       run: |
@@ -112,6 +89,7 @@ jobs:
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
 
+    # ---------- Download video ----------
     - name: Download video
       id: download
       run: |
@@ -146,6 +124,7 @@ jobs:
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
+    # ---------- Send to Telegram (with retry on rate limit) ----------
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -160,30 +139,48 @@ jobs:
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
 
         echo "Sending file: $FILE"
+        # Send with retry on 429
+        MAX_RETRIES=5
+        RETRY_DELAY=10
+        for i in $(seq 1 $MAX_RETRIES); do
+          if [ "$EXT" = "mp4" ]; then
+            RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
+              -F chat_id="$CHAT_ID" \
+              -F video=@"$FILE" \
+              -F caption="🎬 *${TITLE}*" \
+              -F parse_mode="Markdown")
+          else
+            RESP=$(curl -s -X POST "${API_URL}/sendDocument" \
+              -F chat_id="$CHAT_ID" \
+              -F document=@"$FILE" \
+              -F caption="🎵 *${TITLE}*" \
+              -F parse_mode="Markdown")
+          fi
+          MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
+          if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
+            ERROR=$(echo "$RESP" | jq -r '.description')
+            if echo "$ERROR" | grep -q "Too Many Requests"; then
+              RETRY_AFTER=$(echo "$RESP" | jq -r '.parameters.retry_after // 10')
+              echo "Rate limited. Retry after $RETRY_AFTER seconds (attempt $i/$MAX_RETRIES)"
+              sleep $((RETRY_AFTER + 2))
+              continue
+            else
+              echo "ERROR: Failed to send file. Response: $RESP"
+              exit 1
+            fi
+          else
+            echo "Sent file, message ID: $MSG_ID"
+            break
+          fi
+        done
 
-        if [ "$EXT" = "mp4" ]; then
-          RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
-            -F chat_id="$CHAT_ID" \
-            -F video=@"$FILE" \
-            -F caption="🎬 *${TITLE}*" \
-            -F parse_mode="Markdown")
-        else
-          RESP=$(curl -s -X POST "${API_URL}/sendDocument" \
-            -F chat_id="$CHAT_ID" \
-            -F document=@"$FILE" \
-            -F caption="🎵 *${TITLE}*" \
-            -F parse_mode="Markdown")
-        fi
-
-        MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
-        echo "Response: $RESP"
+        # If still no MSG_ID, fail
         if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
-          echo "ERROR: Failed to send file. Response: $RESP"
+          echo "ERROR: Failed to send file after $MAX_RETRIES attempts."
           exit 1
         fi
 
-        echo "Sent file, message ID: $MSG_ID"
-
+        # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
           if [ -n "$THUMB_MSG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
@@ -197,6 +194,7 @@ jobs:
             -d message_id="$MSG_ID"
         fi
 
+        # Delete progress message
         curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
           -d chat_id="$CHAT_ID" \
           -d message_id="$PROGRESS_MSG_ID"
