@@ -159,31 +159,64 @@ jobs:
               -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
           fi
         }
+        send_with_retry() {
+          local API_URL="$1"; shift
+          local MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            RESP=$(curl -s -X POST "$API_URL" "$@")
+            ERROR_CODE=$(echo "$RESP" | grep -o '"error_code":[0-9]*' | head -1 | cut -d: -f2)
+            if [ "$ERROR_CODE" = "429" ]; then
+              RETRY_AFTER=$(echo "$RESP" | grep -o '"retry_after":[0-9]*' | head -1 | cut -d: -f2)
+              RETRY_AFTER=${RETRY_AFTER:-60}
+              echo "Rate limited. Waiting ${RETRY_AFTER}s (attempt $i/$MAX_RETRIES)"
+              sleep $((RETRY_AFTER + 2))
+              continue
+            fi
+            echo "$RESP"
+            return 0
+          done
+          echo '{"ok":false}'
+          return 1
+        }
+
         report 95 "uploading" || true
         cd /tmp/ig_download
-        echo "=== Send step debug ==="
-        echo "PWD: $(pwd)"
-        ls -la || true
-        set -x
+        API_URL="http://localhost:8081/bot${BOT_TOKEN}"
         MSG_ID=""
+
         for f in *.mp4 *.webm *.mkv; do
           [ -f "$f" ] || continue
-          RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
-          echo "sendVideo RESP: $RESP"
+          echo "Sending video: $f"
+          RESP=$(send_with_retry "${API_URL}/sendVideo" -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
           MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
-          echo "MID=$MID"
-          if [ -n "$MID" ]; then MSG_ID="$MID"; fi
+          if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
         done
+
+        PHOTOS=()
         for f in *.jpg *.png; do
           [ -f "$f" ] || continue
-          echo "Sending photo: $f"
-          RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" -F chat_id="$CHAT_ID" -F photo=@"$f")
-          echo "sendPhoto RESP: $RESP"
-          MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
-          echo "MID=$MID"
-          if [ -n "$MID" ]; then MSG_ID="$MID"; fi
+          PHOTOS+=("$f")
         done
-        set +x
+
+        if [ ${#PHOTOS[@]} -gt 0 ]; then
+          MEDIA="["
+          for i in "${!PHOTOS[@]}"; do
+            if [ $i -gt 0 ]; then MEDIA="$MEDIA,"; fi
+            MEDIA="$MEDIA{\"type\":\"photo\",\"media\":\"attach://p$i\"}"
+          done
+          MEDIA="$MEDIA]"
+
+          CURL_ARGS=(-F chat_id="$CHAT_ID" -F "media=$MEDIA")
+          for i in "${!PHOTOS[@]}"; do
+            CURL_ARGS+=(-F "p$i=@${PHOTOS[$i]}")
+          done
+
+          echo "Sending ${#PHOTOS[@]} photos as album..."
+          RESP=$(send_with_retry "${API_URL}/sendMediaGroup" "${CURL_ARGS[@]}")
+          MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
+          if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
+        fi
+
         echo "Final MSG_ID=$MSG_ID"
         if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
           report 0 "error" || true
