@@ -141,6 +141,7 @@ jobs:
 
         yt-dlp $F \
           --merge-output-format mp4 \
+          --write-thumbnail --convert-thumbnails jpg \
           --cookies cookies.txt \
           --js-runtimes deno \
           -o "${SAFE_TITLE}.%(ext)s" "$URL"
@@ -149,13 +150,38 @@ jobs:
           EXT="mp3"
           FINAL_NAME="${SAFE_TITLE}.${EXT}"
           cp "${SAFE_TITLE}.${EXT}" "$FINAL_NAME"
+          echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          echo "duration=0" >> $GITHUB_OUTPUT
+          echo "width=0" >> $GITHUB_OUTPUT
+          echo "height=0" >> $GITHUB_OUTPUT
+          echo "thumb=" >> $GITHUB_OUTPUT
         else
           EXT="mp4"
           INPUT="${SAFE_TITLE}.${EXT}"
           ffmpeg -i "$INPUT" -c copy -movflags +faststart "${SAFE_TITLE}_stream.mp4"
           FINAL_NAME="${SAFE_TITLE}_stream.${EXT}"
+
+          # Extract metadata for Telegram
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${SAFE_TITLE}_stream.mp4" 2>/dev/null | cut -d. -f1)
+          WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=s=x:p=0 "${SAFE_TITLE}_stream.mp4" 2>/dev/null)
+          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "${SAFE_TITLE}_stream.mp4" 2>/dev/null)
+
+          # Find thumbnail
+          THUMB_FILE=""
+          for f in "${SAFE_TITLE}.jpg" "${SAFE_TITLE}.webp" "${SAFE_TITLE}.thumb.jpg"; do
+            if [ -f "$f" ]; then
+              THUMB_FILE="$f"
+              break
+            fi
+          done
+
+          echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          echo "duration=${DURATION:-0}" >> $GITHUB_OUTPUT
+          echo "width=${WIDTH:-0}" >> $GITHUB_OUTPUT
+          echo "height=${HEIGHT:-0}" >> $GITHUB_OUTPUT
+          echo "thumb=${THUMB_FILE}" >> $GITHUB_OUTPUT
+          echo "Metadata: duration=${DURATION:-0}s, ${WIDTH:-0}x${HEIGHT:-0}, thumb=${THUMB_FILE:-none}"
         fi
-        echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
     # ---------- Send to Telegram (with retry on rate limit) ----------
     - name: Send to Telegram
@@ -166,18 +192,30 @@ jobs:
         TITLE: ${{ steps.title.outputs.raw_title }}
         GROUP_CHAT_ID: ${{ steps.inputs.outputs.group_chat_id }}
         THUMB_MSG_ID: ${{ steps.inputs.outputs.thumb_msg_id }}
+        DURATION: ${{ steps.download.outputs.duration }}
+        WIDTH: ${{ steps.download.outputs.width }}
+        HEIGHT: ${{ steps.download.outputs.height }}
+        THUMB_FILE: ${{ steps.download.outputs.thumb }}
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
         EXT="${FILE##*.}"
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
 
-        echo "Sending file: $FILE"
+        echo "Sending file: $FILE (duration=${DURATION}s, ${WIDTH}x${HEIGHT}, thumb=${THUMB_FILE:-none})"
         MAX_RETRIES=3
         for i in $(seq 1 $MAX_RETRIES); do
           if [ "$EXT" = "mp4" ]; then
+            THUMB_ARGS=""
+            if [ -n "$THUMB_FILE" ] && [ -f "$THUMB_FILE" ]; then
+              THUMB_ARGS="-F thumb=@${THUMB_FILE}"
+            fi
             RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
               -F chat_id="$CHAT_ID" \
               -F video=@"$FILE" \
+              $THUMB_ARGS \
+              -F duration="$DURATION" \
+              -F width="$WIDTH" \
+              -F height="$HEIGHT" \
               -F supports_streaming=true \
               -F caption="🎬 *${TITLE}*" \
               -F parse_mode="Markdown")
