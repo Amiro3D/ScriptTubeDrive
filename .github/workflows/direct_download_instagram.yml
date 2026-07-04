@@ -221,54 +221,38 @@ jobs:
 
         cd /tmp/ig_download
 
-        if [ "$FILE_COUNT" -le 1 ]; then
-          # Single file - send as video or photo
-          VIDEO_FILE=$(ls *.mp4 *.webm *.mkv 2>/dev/null | head -1)
-          PHOTO_FILE=$(ls *.jpg *.png 2>/dev/null | grep -v "^ig_" | head -1)
+        MSG_ID=""
+        SENT_COUNT=0
 
-          if [ -n "$VIDEO_FILE" ]; then
-            RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" \
-              -F chat_id="$CHAT_ID" \
-              -F video=@"$VIDEO_FILE" \
-              -F supports_streaming=true)
-          elif [ -n "$PHOTO_FILE" ]; then
-            RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" \
-              -F chat_id="$CHAT_ID" \
-              -F photo=@"$PHOTO_FILE")
+        # Send videos first
+        for f in *.mp4 *.webm *.mkv; do
+          [ -f "$f" ] || continue
+          RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" \
+            -F chat_id="$CHAT_ID" \
+            -F video=@"$f" \
+            -F supports_streaming=true)
+          MID=$(echo "$RESP" | jq -r '.result.message_id')
+          if [ -n "$MID" ] && [ "$MID" != "null" ]; then
+            [ -z "$MSG_ID" ] && MSG_ID="$MID"
+            SENT_COUNT=$((SENT_COUNT + 1))
           fi
-          MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
-        else
-          # Multiple files - send as media group (album)
-          # Build media array
-          MEDIA_JSON="["
-          FIRST=true
-          for f in *.mp4 *.webm *.mkv; do
-            [ -f "$f" ] || continue
-            if [ "$FIRST" = true ]; then FIRST=false; else MEDIA_JSON+=","; fi
-            MEDIA_JSON+="{\"type\":\"video\",\"media\":\"attach://$(basename "$f")\"}"
-          done
-          for f in *.jpg *.png; do
-            [ -f "$f" ] || continue
-            [[ "$f" == ig_* ]] && continue
-            if [ "$FIRST" = true ]; then FIRST=false; else MEDIA_JSON+=","; fi
-            MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://$(basename "$f")\"}"
-          done
-          MEDIA_JSON+="]"
+        done
 
-          # Build curl command with all files
-          CURL_CMD="curl -s -X POST 'http://localhost:8081/bot${BOT_TOKEN}/sendMediaGroup' -F chat_id='$CHAT_ID'"
-          for f in *.mp4 *.webm *.mkv *.jpg *.png; do
-            [ -f "$f" ] || continue
-            [[ "$f" == ig_* ]] && continue
-            CURL_CMD+=" -F media=@'$f'"
-          done
-          CURL_CMD+=" -F media='$MEDIA_JSON'"
+        # Send photos (skip yt-dlp thumbnails prefixed with ig_)
+        for f in *.jpg *.png; do
+          [ -f "$f" ] || continue
+          [[ "$f" == ig_* ]] && continue
+          RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" \
+            -F chat_id="$CHAT_ID" \
+            -F photo=@"$f")
+          MID=$(echo "$RESP" | jq -r '.result.message_id')
+          if [ -n "$MID" ] && [ "$MID" != "null" ]; then
+            [ -z "$MSG_ID" ] && MSG_ID="$MID"
+            SENT_COUNT=$((SENT_COUNT + 1))
+          fi
+        done
 
-          RESP=$(eval $CURL_CMD)
-          MSG_ID=$(echo "$RESP" | jq -r '.result[0].message_id')
-        fi
-
-        if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
+        if [ "$SENT_COUNT" -eq 0 ]; then
           report 0 "error"
           exit 1
         fi
@@ -277,13 +261,11 @@ jobs:
 
         # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
-          # Forward progress/status message
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
             -d chat_id="$GROUP_CHAT_ID" \
             -d from_chat_id="$CHAT_ID" \
             -d message_id="$PROGRESS_MSG_ID"
-          # Forward content
-          if [ "$FILE_COUNT" -le 1 ]; then
+          if [ -n "$MSG_ID" ] && [ "$MSG_ID" != "null" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
               -d chat_id="$GROUP_CHAT_ID" \
               -d from_chat_id="$CHAT_ID" \
