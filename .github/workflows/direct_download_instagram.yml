@@ -247,8 +247,7 @@ jobs:
           fi
           MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
         elif [ "$FILE_TOTAL" -gt 1 ]; then
-          # Multiple files - send as media group
-          # Build JSON for media parameter
+          # Multiple files - send as media group using python3
           MEDIA_JSON="["
           FIRST=true
           for f in "${MEDIA_FILES[@]}"; do
@@ -262,25 +261,22 @@ jobs:
           done
           MEDIA_JSON+="]"
 
-          # Write a helper script to avoid shell quoting issues
-          cat > /tmp/send_album.sh << 'SCRIPT_END'
-#!/bin/bash
-BOT="$1"
-CHAT="$2"
-JSON_FILE="$3"
-shift 3
-# $@ now contains the file paths
-CURL_CMD=(curl -s -X POST "http://localhost:8081/bot${BOT}/sendMediaGroup" -F "chat_id=${CHAT}")
-for f in "$@"; do
-  CURL_CMD+=(-F "media=@${f}")
-done
-CURL_CMD+=(-F "media=$(cat "$JSON_FILE")")
-"${CURL_CMD[@]}"
-SCRIPT_END
-          chmod +x /tmp/send_album.sh
+          # Use python3 to call curl (avoids all shell quoting issues)
+          RESP=$(python3 -c "
+import subprocess, json, sys
+media_json = sys.argv[1]
+chat_id = sys.argv[2]
+bot_token = sys.argv[3]
+files = sys.argv[4:]
+cmd = ['curl', '-s', '-X', 'POST', f'http://localhost:8081/bot{bot_token}/sendMediaGroup',
+       '-F', f'chat_id={chat_id}']
+for f in files:
+    cmd.extend(['-F', f'media=@{f}'])
+cmd.extend(['-F', f'media={media_json}'])
+result = subprocess.run(cmd, capture_output=True, text=True)
+print(result.stdout)
+" "$MEDIA_JSON" "$CHAT_ID" "$BOT_TOKEN" "${MEDIA_FILES[@]}")
 
-          RESP=$(bash /tmp/send_album.sh "$BOT_TOKEN" "$CHAT_ID" /tmp/ig_media.json "${MEDIA_FILES[@]}")
-          rm -f /tmp/send_album.sh /tmp/ig_media.json
           echo "sendMediaGroup response: $RESP"
           MSG_ID=$(echo "$RESP" | jq -r '.result[0].message_id')
         fi
