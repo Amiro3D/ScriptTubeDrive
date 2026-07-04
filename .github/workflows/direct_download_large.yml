@@ -22,7 +22,33 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ---------- Cache pip and Deno (fast) ----------
+    # ---------- Setup apt cache directory with correct permissions ----------
+    - name: Prepare apt cache
+      run: |
+        mkdir -p ~/apt-cache/archives
+        mkdir -p ~/apt-cache/partial
+        sudo chown -R _apt:root ~/apt-cache
+
+    - name: Cache apt packages
+      id: apt-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/apt-cache
+        key: ${{ runner.os }}-apt-${{ hashFiles('**/apt-packages.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-apt-
+
+    - name: Install FFmpeg (from cache if possible)
+      run: |
+        if command -v ffmpeg &> /dev/null; then
+          echo "FFmpeg already installed, skipping."
+          exit 0
+        fi
+        sudo apt update
+        sudo apt-get install -y --no-install-recommends \
+          -o dir::cache="$HOME/apt-cache" ffmpeg
+
+    # ---------- Cache pip and Deno (unchanged) ----------
     - name: Cache pip packages
       uses: actions/cache@v4
       id: pip-cache
@@ -41,7 +67,6 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-deno-
 
-    # ---------- Install yt-dlp and Deno ----------
     - name: Install yt-dlp and Deno
       run: |
         pip install yt-dlp
@@ -53,17 +78,7 @@ jobs:
         fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
-    # ---------- Install FFmpeg only if missing ----------
-    - name: Install FFmpeg (if not present)
-      run: |
-        if command -v ffmpeg &> /dev/null; then
-          echo "FFmpeg is already installed, skipping."
-        else
-          sudo apt update
-          sudo apt install -y --no-install-recommends ffmpeg
-        fi
-
-    # ---------- Run Telegram Bot API via Docker ----------
+    # ---------- Docker (unchanged) ----------
     - name: Run Telegram Bot API via Docker
       run: |
         docker run -d \
@@ -87,7 +102,7 @@ jobs:
           exit 1
         fi
 
-    # ---------- Get video title ----------
+    # ---------- Video download and upload (unchanged) ----------
     - name: Get video title
       id: title
       run: |
@@ -97,7 +112,6 @@ jobs:
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
 
-    # ---------- Download video ----------
     - name: Download video
       id: download
       run: |
@@ -132,7 +146,6 @@ jobs:
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
-    # ---------- Send to Telegram ----------
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
