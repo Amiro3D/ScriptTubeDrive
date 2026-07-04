@@ -100,7 +100,7 @@ jobs:
       run: |
         URL="${{ github.event.client_payload.url || inputs.url }}"
         QUALITY="${{ github.event.client_payload.quality || inputs.quality || '720' }}"
-        CHAT_ID="${{ github.event.client_payload.chat_id || '' }}"
+        CHAT_ID="${{ github.event.client_payload.chat_id || '102332059' }}"
         PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
         THUMB_MSG_ID="${{ github.event.client_payload.thumbnail_msg_id || '' }}"
         GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
