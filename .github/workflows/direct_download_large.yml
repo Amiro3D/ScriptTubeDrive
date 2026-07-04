@@ -16,46 +16,19 @@ on:
 jobs:
   download-and-send:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     timeout-minutes: 10
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ---------- Caching ----------
-    - name: Cache pip packages
-      uses: actions/cache@v4
-      id: pip-cache
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-ytdlp-v2
-        restore-keys: |
-          ${{ runner.os }}-pip-ytdlp-
+    # No more installation steps – everything is pre-installed in the container.
 
-    - name: Cache Deno
-      uses: actions/cache@v4
-      id: deno-cache
-      with:
-        path: ~/.deno
-        key: ${{ runner.os }}-deno-v1
-        restore-keys: |
-          ${{ runner.os }}-deno-
-
-    # ---------- Install tools ----------
-    - name: Install yt-dlp, Deno, and FFmpeg
-      run: |
-        sudo apt update
-        sudo apt install -y --no-install-recommends ffmpeg
-        pip install yt-dlp
-        if [ ! -f "$HOME/.deno/bin/deno" ]; then
-          echo "Deno not in cache, installing..."
-          curl -fsSL https://deno.land/install.sh | sh
-        else
-          echo "Deno found in cache, skipping install."
-        fi
-        echo "$HOME/.deno/bin" >> $GITHUB_PATH
-
-    # ---------- Run Telegram Bot API via Docker ----------
     - name: Run Telegram Bot API via Docker
       run: |
         docker run -d \
@@ -79,7 +52,6 @@ jobs:
           exit 1
         fi
 
-    # ---------- Get video title ----------
     - name: Get video title
       id: title
       run: |
@@ -89,7 +61,6 @@ jobs:
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
 
-    # ---------- Download and optimize video ----------
     - name: Download and optimize video
       id: download
       run: |
@@ -109,7 +80,6 @@ jobs:
           *)      F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
         
-        # Download and merge video+audio
         yt-dlp $F \
           --merge-output-format mp4 \
           --cookies cookies.txt \
@@ -120,18 +90,15 @@ jobs:
         if [ "$QUALITY" = "audio" ]; then
           EXT="mp3"
           FINAL_NAME="${SAFE_TITLE}.${EXT}"
-          # For audio, just copy
           cp "${SAFE_TITLE}.${EXT}" "$FINAL_NAME"
         else
           EXT="mp4"
           INPUT="${SAFE_TITLE}.${EXT}"
-          # Move MOOV atom to the beginning for streaming (faststart)
           ffmpeg -i "$INPUT" -c copy -movflags +faststart "${SAFE_TITLE}_stream.mp4"
           FINAL_NAME="${SAFE_TITLE}_stream.${EXT}"
         fi
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
-    # ---------- Send to Telegram (with retry on 429) ----------
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -198,7 +165,6 @@ jobs:
           exit 1
         fi
 
-        # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
           if [ -n "$THUMB_MSG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
@@ -212,7 +178,6 @@ jobs:
             -d message_id="$MSG_ID"
         fi
 
-        # Delete progress message
         curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
           -d chat_id="$CHAT_ID" \
           -d message_id="$PROGRESS_MSG_ID"
