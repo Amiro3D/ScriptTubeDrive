@@ -22,7 +22,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ---------- Install yt-dlp and Deno (with caching) ----------
+    # ---------- Caching ----------
     - name: Cache pip packages
       uses: actions/cache@v4
       id: pip-cache
@@ -41,8 +41,13 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-deno-
 
-    - name: Install yt-dlp and Deno
+    # ---------- Install tools ----------
+    - name: Install yt-dlp, Deno, and FFmpeg
       run: |
+        # Install ffmpeg (required for merging video+audio)
+        sudo apt update
+        sudo apt install -y --no-install-recommends ffmpeg
+
         pip install yt-dlp
         if [ ! -f "$HOME/.deno/bin/deno" ]; then
           echo "Deno not in cache, installing..."
@@ -51,9 +56,6 @@ jobs:
           echo "Deno found in cache, skipping install."
         fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
-
-    # ---------- FFmpeg is already pre-installed on Ubuntu runners, so we skip installation ----------
-    # No apt install needed – saves ~12 seconds.
 
     # ---------- Run Telegram Bot API via Docker ----------
     - name: Run Telegram Bot API via Docker
@@ -124,7 +126,7 @@ jobs:
         FINAL_NAME="${SAFE_TITLE}.${EXT}"
         echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
 
-    # ---------- Send to Telegram (with retry on rate limit) ----------
+    # ---------- Send to Telegram (with retry on 429) ----------
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -139,9 +141,8 @@ jobs:
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
 
         echo "Sending file: $FILE"
-        # Send with retry on 429
+        # Retry on rate limit
         MAX_RETRIES=5
-        RETRY_DELAY=10
         for i in $(seq 1 $MAX_RETRIES); do
           if [ "$EXT" = "mp4" ]; then
             RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
@@ -174,7 +175,6 @@ jobs:
           fi
         done
 
-        # If still no MSG_ID, fail
         if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
           echo "ERROR: Failed to send file after $MAX_RETRIES attempts."
           exit 1
