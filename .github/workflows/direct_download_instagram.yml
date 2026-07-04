@@ -155,26 +155,33 @@ jobs:
               -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
           fi
         }
-        report 95 "uploading"
+        report 95 "uploading" || true
         cd /tmp/ig_download
         MSG_ID=""
         for f in *.mp4 *.webm *.mkv; do
           [ -f "$f" ] || continue
           RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
-          if [ -z "$MSG_ID" ]; then MID=$(echo "$RESP" | jq -r '.result.message_id'); [ -n "$MID" ] && [ "$MID" != "null" ] && MSG_ID="$MID"; fi
+          if [ -z "$MSG_ID" ]; then
+            MID=$(echo "$RESP" | jq -r '.result.message_id')
+            if [ -n "$MID" ] && [ "$MID" != "null" ]; then MSG_ID="$MID"; fi
+          fi
         done
         for f in *.jpg *.png; do
           [ -f "$f" ] || continue
-          if [[ "$f" == ig_* ]]; then continue; fi
           RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" -F chat_id="$CHAT_ID" -F photo=@"$f")
-          if [ -z "$MSG_ID" ]; then MID=$(echo "$RESP" | jq -r '.result.message_id'); [ -n "$MID" ] && [ "$MID" != "null" ] && MSG_ID="$MID"; fi
+          if [ -z "$MSG_ID" ]; then
+            MID=$(echo "$RESP" | jq -r '.result.message_id')
+            if [ -n "$MID" ] && [ "$MID" != "null" ]; then MSG_ID="$MID"; fi
+          fi
         done
         if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
-          report 0 "error"
+          report 0 "error" || true
           exit 1
         fi
-        report 100 "done" "$TOTAL_SIZE" "Instagram"
+        report 100 "done" "$TOTAL_SIZE" "Instagram" || true
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
-          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$PROGRESS_MSG_ID"
-          [ -n "$MSG_ID" ] && [ "$MSG_ID" != "null" ] && curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$MSG_ID"
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$PROGRESS_MSG_ID" || true
+          if [ -n "$MSG_ID" ] && [ "$MSG_ID" != "null" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$MSG_ID" || true
+          fi
         fi
