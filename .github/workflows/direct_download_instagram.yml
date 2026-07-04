@@ -1,0 +1,256 @@
+name: Instagram Download
+
+on:
+  repository_dispatch:
+    types: [direct_download_instagram]
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Instagram URL'
+        required: true
+
+jobs:
+  download-and-send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout (for cookies.txt)
+      uses: actions/checkout@v4
+
+    # ---------- Cache all tools ----------
+    - name: Cache ffmpeg
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/bin/ff*
+        key: ffmpeg-static-v2
+
+    - name: Cache yt-dlp
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/bin/yt-dlp
+        key: ytdlp-standalone-v1
+
+    - name: Cache Deno
+      uses: actions/cache@v4
+      with:
+        path: ~/.deno
+        key: deno-linux-x64-v1
+
+    # ---------- Install tools ----------
+    - name: Install tools
+      run: |
+        if [ ! -f /usr/local/bin/ffmpeg ]; then
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
+          cd /tmp && tar xf ffmpeg.tar.xz
+          sudo cp /tmp/ffmpeg-*-amd64-static/ffmpeg /usr/local/bin/ffmpeg
+          sudo cp /tmp/ffmpeg-*-amd64-static/ffprobe /usr/local/bin/ffprobe
+          sudo chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+          rm -rf /tmp/ffmpeg*
+        fi
+        if [ ! -f /usr/local/bin/yt-dlp ]; then
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod +x /usr/local/bin/yt-dlp
+        fi
+        if [ ! -f "$HOME/.deno/bin/deno" ]; then
+          curl -fsSL https://deno.land/install.sh | sh
+        fi
+        echo "$HOME/.deno/bin" >> $GITHUB_PATH
+
+    # ---------- Run Telegram Bot API via Docker ----------
+    - name: Run Telegram Bot API via Docker
+      run: |
+        docker run -d \
+          --name telegram-bot-api \
+          -p 8081:8081 \
+          -e TELEGRAM_API_ID=32919068 \
+          -e TELEGRAM_API_HASH="${{ secrets.TELEGRAM_API_HASH }}" \
+          -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+          aiogram/telegram-bot-api:latest
+        for i in {1..20}; do
+          if curl -s http://localhost:8081/ping > /dev/null 2>&1; then break; fi
+          sleep 2
+        done
+        if ! curl -s http://localhost:8081/ping > /dev/null 2>&1; then
+          docker logs telegram-bot-api
+          exit 1
+        fi
+
+    # ---------- Resolve inputs ----------
+    - name: Resolve inputs
+      id: inputs
+      run: |
+        URL="${{ github.event.client_payload.url || inputs.url }}"
+        CHAT_ID="${{ github.event.client_payload.chat_id || '' }}"
+        PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
+        GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
+        echo "url=${URL}" >> $GITHUB_OUTPUT
+        echo "chat_id=${CHAT_ID}" >> $GITHUB_OUTPUT
+        echo "progress_msg_id=${PROGRESS_MSG_ID}" >> $GITHUB_OUTPUT
+        echo "group_chat_id=${GROUP_CHAT_ID}" >> $GITHUB_OUTPUT
+
+    # ---------- Report progress ----------
+    - name: Report progress
+      run: |
+        report() {
+          if [ -n "${{ steps.inputs.outputs.chat_id }}" ] && [ -n "${{ steps.inputs.outputs.progress_msg_id }}" ]; then
+            curl -s -X POST "https://bitter-wind-2755.ame315898036.workers.dev/progress" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"${{ steps.inputs.outputs.chat_id }}\",\"message_id\":\"${{ steps.inputs.outputs.progress_msg_id }}\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
+          fi
+        }
+        report 10 "downloading"
+
+    # ---------- Download Instagram content ----------
+    - name: Download Instagram
+      id: download
+      env:
+        CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
+        PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
+      run: |
+        WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
+        report() {
+          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
+            curl -s -X POST "$WORKER_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
+          fi
+        }
+
+        URL="${{ steps.inputs.outputs.url }}"
+        mkdir -p /tmp/ig_download
+        cd /tmp/ig_download
+
+        report 20 "downloading"
+
+        # Download with yt-dlp - get all items in carousel
+        yt-dlp \
+          --write-thumbnail \
+          --convert-thumbnails jpg \
+          -o "ig_%(id)s.%(ext)s" \
+          --no-overwrites \
+          --ignore-errors \
+          "$URL" 2>&1 || true
+
+        report 70 "downloading"
+
+        # Count downloaded files
+        FILES=(*)
+        FILE_COUNT=0
+        for f in "${FILES[@]}"; do
+          if [ -f "$f" ] && [[ ! "$f" == *.jpg ]]; then
+            FILE_COUNT=$((FILE_COUNT + 1))
+          fi
+        done
+
+        # Get thumbnail
+        THUMB=""
+        for f in *.jpg; do
+          if [ -f "$f" ]; then
+            THUMB="$f"
+            break
+          fi
+        done
+
+        # Get total size
+        TOTAL_SIZE=$(du -sh /tmp/ig_download 2>/dev/null | cut -f1 | sed 's/M$/MB/' | sed 's/G$/GB/')
+
+        echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
+        echo "thumb=${THUMB}" >> $GITHUB_OUTPUT
+        echo "total_size=${TOTAL_SIZE}" >> $GITHUB_OUTPUT
+        echo "Downloaded ${FILE_COUNT} files, size: ${TOTAL_SIZE}"
+
+        report 90 "downloading"
+
+    # ---------- Send to Telegram ----------
+    - name: Send to Telegram
+      env:
+        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
+        PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
+        GROUP_CHAT_ID: ${{ steps.inputs.outputs.group_chat_id }}
+        FILE_COUNT: ${{ steps.download.outputs.file_count }}
+        TOTAL_SIZE: ${{ steps.download.outputs.total_size }}
+      run: |
+        WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
+        report() {
+          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
+            curl -s -X POST "$WORKER_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
+          fi
+        }
+
+        report 95 "uploading"
+
+        cd /tmp/ig_download
+
+        if [ "$FILE_COUNT" -le 1 ]; then
+          # Single file - send as video or photo
+          VIDEO_FILE=$(ls *.mp4 *.webm *.mkv 2>/dev/null | head -1)
+          PHOTO_FILE=$(ls *.jpg *.png 2>/dev/null | grep -v "^ig_" | head -1)
+
+          if [ -n "$VIDEO_FILE" ]; then
+            RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" \
+              -F chat_id="$CHAT_ID" \
+              -F video=@"$VIDEO_FILE" \
+              -F supports_streaming=true)
+          elif [ -n "$PHOTO_FILE" ]; then
+            RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" \
+              -F chat_id="$CHAT_ID" \
+              -F photo=@"$PHOTO_FILE")
+          fi
+          MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
+        else
+          # Multiple files - send as media group (album)
+          # Build media array
+          MEDIA_JSON="["
+          FIRST=true
+          for f in *.mp4 *.webm *.mkv; do
+            [ -f "$f" ] || continue
+            if [ "$FIRST" = true ]; then FIRST=false; else MEDIA_JSON+=","; fi
+            MEDIA_JSON+="{\"type\":\"video\",\"media\":\"attach://$(basename "$f")\"}"
+          done
+          for f in *.jpg *.png; do
+            [ -f "$f" ] || continue
+            [[ "$f" == ig_* ]] && continue
+            if [ "$FIRST" = true ]; then FIRST=false; else MEDIA_JSON+=","; fi
+            MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://$(basename "$f")\"}"
+          done
+          MEDIA_JSON+="]"
+
+          # Build curl command with all files
+          CURL_CMD="curl -s -X POST 'http://localhost:8081/bot${BOT_TOKEN}/sendMediaGroup' -F chat_id='$CHAT_ID'"
+          for f in *.mp4 *.webm *.mkv *.jpg *.png; do
+            [ -f "$f" ] || continue
+            [[ "$f" == ig_* ]] && continue
+            CURL_CMD+=" -F media=@'$f'"
+          done
+          CURL_CMD+=" -F media='$MEDIA_JSON'"
+
+          RESP=$(eval $CURL_CMD)
+          MSG_ID=$(echo "$RESP" | jq -r '.result[0].message_id')
+        fi
+
+        if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
+          report 0 "error"
+          exit 1
+        fi
+
+        report 100 "done" "$TOTAL_SIZE" "Instagram"
+
+        # Forward to group if provided
+        if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
+          # Forward progress/status message
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
+            -d chat_id="$GROUP_CHAT_ID" \
+            -d from_chat_id="$CHAT_ID" \
+            -d message_id="$PROGRESS_MSG_ID"
+          # Forward content
+          if [ "$FILE_COUNT" -le 1 ]; then
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
+              -d chat_id="$GROUP_CHAT_ID" \
+              -d from_chat_id="$CHAT_ID" \
+              -d message_id="$MSG_ID"
+          fi
+        fi
