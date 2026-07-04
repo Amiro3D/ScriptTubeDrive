@@ -183,38 +183,40 @@ jobs:
         cd /tmp/ig_download
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
         MSG_ID=""
+        HAS_VIDEO=false
 
         for f in *.mp4 *.webm *.mkv; do
           [ -f "$f" ] || continue
+          HAS_VIDEO=true
           echo "Sending video: $f"
           RESP=$(send_with_retry "${API_URL}/sendVideo" -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
           MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
           if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
         done
 
-        PHOTOS=()
-        for f in *.jpg *.png; do
-          [ -f "$f" ] || continue
-          PHOTOS+=("$f")
-        done
-
-        if [ ${#PHOTOS[@]} -gt 0 ]; then
-          MEDIA="["
-          for i in "${!PHOTOS[@]}"; do
-            if [ $i -gt 0 ]; then MEDIA="$MEDIA,"; fi
-            MEDIA="$MEDIA{\"type\":\"photo\",\"media\":\"attach://p$i\"}"
-          done
-          MEDIA="$MEDIA]"
-
-          CURL_ARGS=(-F chat_id="$CHAT_ID" -F "media=$MEDIA")
-          for i in "${!PHOTOS[@]}"; do
-            CURL_ARGS+=(-F "p$i=@${PHOTOS[$i]}")
+        if [ "$HAS_VIDEO" = false ]; then
+          PHOTOS=()
+          for f in *.jpg *.png; do
+            [ -f "$f" ] || continue
+            PHOTOS+=("$f")
           done
 
-          echo "Sending ${#PHOTOS[@]} photos as album..."
-          RESP=$(send_with_retry "${API_URL}/sendMediaGroup" "${CURL_ARGS[@]}")
-          MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
-          if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
+          if [ ${#PHOTOS[@]} -gt 0 ]; then
+            MEDIA="["
+            for i in "${!PHOTOS[@]}"; do
+              if [ $i -gt 0 ]; then MEDIA="$MEDIA,"; fi
+              MEDIA="$MEDIA{\"type\":\"photo\",\"media\":\"attach://p$i\"}"
+            done
+            MEDIA="$MEDIA]"
+            CURL_ARGS=(-F chat_id="$CHAT_ID" -F "media=$MEDIA")
+            for i in "${!PHOTOS[@]}"; do
+              CURL_ARGS+=(-F "p$i=@${PHOTOS[$i]}")
+            done
+            echo "Sending ${#PHOTOS[@]} photos as album..."
+            RESP=$(send_with_retry "${API_URL}/sendMediaGroup" "${CURL_ARGS[@]}")
+            MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
+            if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
+          fi
         fi
 
         echo "Final MSG_ID=$MSG_ID"
