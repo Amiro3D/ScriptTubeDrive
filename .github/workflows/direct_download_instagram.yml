@@ -81,7 +81,7 @@ jobs:
       id: inputs
       run: |
         URL="${{ github.event.client_payload.url || inputs.url }}"
-        CHAT_ID="${{ github.event.client_payload.chat_id || '' }}"
+        CHAT_ID="${{ github.event.client_payload.chat_id || '102332059' }}"
         PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
         GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
         echo "url=${URL}" >> $GITHUB_OUTPUT
