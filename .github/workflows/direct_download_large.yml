@@ -66,6 +66,7 @@ jobs:
           curl -fsSL https://deno.land/install.sh | sh
         fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
+        sudo apt-get install -y jq > /dev/null 2>&1 || true
         echo "ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
         echo "yt-dlp: $(yt-dlp --version)"
 
