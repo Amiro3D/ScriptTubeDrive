@@ -247,7 +247,8 @@ jobs:
           fi
           MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
         elif [ "$FILE_TOTAL" -gt 1 ]; then
-          # Multiple files - send as media group via stdin
+          # Multiple files - send as media group
+          # Write JSON to temp file
           MEDIA_JSON="["
           FIRST=true
           for f in "${MEDIA_FILES[@]}"; do
@@ -260,25 +261,18 @@ jobs:
             MEDIA_JSON+="{\"type\":\"${TYPE}\",\"media\":\"attach://${f}\"}"
           done
           MEDIA_JSON+="]"
+          echo "$MEDIA_JSON" > /tmp/ig_media.json
 
-          # Build curl args file (avoids eval quoting issues)
-          ARGS_FILE=$(mktemp)
-          echo "-s" > "$ARGS_FILE"
-          echo "-X" >> "$ARGS_FILE"
-          echo "POST" >> "$ARGS_FILE"
-          echo "http://localhost:8081/bot${BOT_TOKEN}/sendMediaGroup" >> "$ARGS_FILE"
-          echo "-F" >> "$ARGS_FILE"
-          echo "chat_id=${CHAT_ID}" >> "$ARGS_FILE"
+          # Build curl command - use env var for JSON to avoid quoting issues
+          CURL_ARGS=(-s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendMediaGroup" -F "chat_id=${CHAT_ID}")
           for f in "${MEDIA_FILES[@]}"; do
-            echo "-F" >> "$ARGS_FILE"
-            echo "media=@${f}" >> "$ARGS_FILE"
+            CURL_ARGS+=(-F "media=@${f}")
           done
-          echo "-F" >> "$ARGS_FILE"
-          echo "media=${MEDIA_JSON}" >> "$ARGS_FILE"
+          CURL_ARGS+=(-F "media=${MEDIA_JSON}")
 
-          RESP=$(xargs < "$ARGS_FILE" curl)
-          rm -f "$ARGS_FILE"
+          RESP=$(curl "${CURL_ARGS[@]}")
           MSG_ID=$(echo "$RESP" | jq -r '.result[0].message_id')
+          rm -f /tmp/ig_media.json
         fi
 
         if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
