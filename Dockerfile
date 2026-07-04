@@ -1,22 +1,23 @@
-FROM ubuntu:24.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    python3-pip \
-    python3 \
     curl \
-    unzip \
     jq \
-    git \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install yt-dlp (allow system package override)
-RUN pip3 install yt-dlp --upgrade --break-system-packages
+# yt-dlp standalone binary (no pip, no python needed)
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+    && chmod +x /usr/local/bin/yt-dlp
 
-# Install Deno (required for yt-dlp JS challenges)
+# Deno (required for yt-dlp JS challenges)
 RUN curl -fsSL https://deno.land/install.sh | sh
 ENV PATH="/root/.deno/bin:${PATH}"
 
-WORKDIR /app
+# Pre-cache yt-dlp components
+RUN yt-dlp --version
+
+WORKDIR /workspace
