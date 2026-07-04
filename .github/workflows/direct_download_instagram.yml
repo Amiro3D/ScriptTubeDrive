@@ -13,12 +13,10 @@ jobs:
   download-and-send:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
     - name: Checkout (for cookies.txt)
       uses: actions/checkout@v4
 
-    # ---------- Cache all tools ----------
     - name: Cache ffmpeg
       uses: actions/cache@v4
       with:
@@ -37,7 +35,6 @@ jobs:
         path: ~/.deno
         key: deno-linux-x64-v1
 
-    # ---------- Install tools ----------
     - name: Install tools
       run: |
         if [ ! -f /usr/local/bin/ffmpeg ]; then
@@ -57,7 +54,6 @@ jobs:
         fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
-    # ---------- Run Telegram Bot API via Docker ----------
     - name: Run Telegram Bot API via Docker
       run: |
         docker run -d \
@@ -76,7 +72,6 @@ jobs:
           exit 1
         fi
 
-    # ---------- Resolve inputs ----------
     - name: Resolve inputs
       id: inputs
       run: |
@@ -89,7 +84,6 @@ jobs:
         echo "progress_msg_id=${PROGRESS_MSG_ID}" >> $GITHUB_OUTPUT
         echo "group_chat_id=${GROUP_CHAT_ID}" >> $GITHUB_OUTPUT
 
-    # ---------- Report progress ----------
     - name: Report progress
       run: |
         report() {
@@ -101,7 +95,6 @@ jobs:
         }
         report 10 "downloading"
 
-    # ---------- Download Instagram content ----------
     - name: Download Instagram
       id: download
       env:
@@ -128,7 +121,6 @@ jobs:
           COOKIES_FILE="$GITHUB_WORKSPACE/instagram_cookies.txt"
         fi
 
-        # Try yt-dlp first (works for video reels)
         yt-dlp \
           --write-thumbnail \
           --convert-thumbnails jpg \
@@ -138,7 +130,6 @@ jobs:
           ${COOKIES_FILE:+--cookies "$COOKIES_FILE"} \
           "$URL" 2>&1 || true
 
-        # Count downloaded files from yt-dlp (exclude thumbnails)
         FILE_COUNT=0
         for f in *; do
           if [ -f "$f" ] && [[ ! "$f" == *.jpg ]] && [[ ! "$f" == *.png ]]; then
@@ -146,7 +137,6 @@ jobs:
           fi
         done
 
-        # If yt-dlp failed (0 files), try gallery-dl for image carousels
         if [ "$FILE_COUNT" -eq 0 ]; then
           echo "yt-dlp got no files, trying gallery-dl..."
           pip install -q gallery-dl 2>/dev/null || true
@@ -155,9 +145,6 @@ jobs:
           else
             gallery-dl -d /tmp/ig_download "$URL" 2>&1 || true
           fi
-
-          # Rename gallery-dl output to match expected naming
-          # gallery-dl creates folders like: /tmp/ig_download/username/filename.jpg
           find /tmp/ig_download -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.mp4" \) | while read f; do
             base=$(basename "$f")
             dir=$(dirname "$f")
@@ -165,10 +152,7 @@ jobs:
               mv "$f" "/tmp/ig_download/$base" 2>/dev/null || true
             fi
           done
-          # Remove empty subdirectories
           find /tmp/ig_download -mindepth 1 -type d -empty -delete 2>/dev/null || true
-
-          # Re-count files
           FILE_COUNT=0
           for f in *; do
             if [ -f "$f" ]; then
@@ -179,7 +163,6 @@ jobs:
 
         report 70 "downloading"
 
-        # Get thumbnail (first jpg/png that's not prefixed with ig_)
         THUMB=""
         for f in *.jpg *.png; do
           if [ -f "$f" ]; then
@@ -188,7 +171,6 @@ jobs:
           fi
         done
 
-        # Get total size
         TOTAL_SIZE=$(du -sh /tmp/ig_download 2>/dev/null | cut -f1 | sed 's/M$/MB/' | sed 's/G$/GB/')
 
         echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
@@ -198,7 +180,6 @@ jobs:
 
         report 90 "downloading"
 
-    # ---------- Send to Telegram ----------
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -221,7 +202,6 @@ jobs:
 
         cd /tmp/ig_download
 
-        # Collect all media files (excluding yt-dlp thumbnails)
         MEDIA_FILES=()
         for f in *.mp4 *.webm *.mkv *.jpg *.png; do
           [ -f "$f" ] || continue
@@ -233,21 +213,16 @@ jobs:
         MSG_ID=""
 
         if [ "$FILE_TOTAL" -eq 1 ]; then
-          # Single file - send as video or photo
           f="${MEDIA_FILES[0]}"
           if [[ "$f" == *.mp4 ]] || [[ "$f" == *.webm ]] || [[ "$f" == *.mkv ]]; then
             RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" \
-              -F chat_id="$CHAT_ID" \
-              -F video=@"$f" \
-              -F supports_streaming=true)
+              -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
           else
             RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" \
-              -F chat_id="$CHAT_ID" \
-              -F photo=@"$f")
+              -F chat_id="$CHAT_ID" -F photo=@"$f")
           fi
           MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
         elif [ "$FILE_TOTAL" -gt 1 ]; then
-          # Multiple files - send as media group using python3 helper
           MEDIA_JSON="["
           FIRST=true
           for f in "${MEDIA_FILES[@]}"; do
@@ -261,27 +236,22 @@ jobs:
           done
           MEDIA_JSON+="]"
 
-          # Write python helper script
-          python3 -c "
-import sys
-lines = [
-    'import subprocess, sys',
-    'media_json = sys.argv[1]',
-    'chat_id = sys.argv[2]',
-    'bot_token = sys.argv[3]',
-    'files = sys.argv[4:]',
-    'cmd = [\"curl\", \"-s\", \"-X\", \"POST\",',
-    '       f\"http://localhost:8081/bot{bot_token}/sendMediaGroup\",',
-    '       \"-F\", f\"chat_id={chat_id}\"]',
-    'for f in files:',
-    '    cmd.extend([\"-F\", f\"media=@{f}\"])',
-    'cmd.extend([\"-F\", f\"media={media_json}\"])',
-    'r = subprocess.run(cmd, capture_output=True, text=True)',
-    'print(r.stdout)',
-]
-with open('/tmp/send_album.py', 'w') as fp:
-    fp.write('\n'.join(lines))
-"
+          # Write temp python script
+          cat > /tmp/send_album.py << PYEOF
+import subprocess, sys
+media_json = sys.argv[1]
+chat_id = sys.argv[2]
+bot_token = sys.argv[3]
+files = sys.argv[4:]
+cmd = ["curl", "-s", "-X", "POST",
+       "http://localhost:8081/bot" + bot_token + "/sendMediaGroup",
+       "-F", "chat_id=" + chat_id]
+for f in files:
+    cmd.extend(["-F", "media=@" + f])
+cmd.extend(["-F", "media=" + media_json])
+r = subprocess.run(cmd, capture_output=True, text=True)
+print(r.stdout)
+PYEOF
 
           RESP=$(python3 /tmp/send_album.py "$MEDIA_JSON" "$CHAT_ID" "$BOT_TOKEN" "${MEDIA_FILES[@]}")
           rm -f /tmp/send_album.py
@@ -296,16 +266,11 @@ with open('/tmp/send_album.py', 'w') as fp:
 
         report 100 "done" "$TOTAL_SIZE" "Instagram"
 
-        # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
-            -d chat_id="$GROUP_CHAT_ID" \
-            -d from_chat_id="$CHAT_ID" \
-            -d message_id="$PROGRESS_MSG_ID"
+            -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$PROGRESS_MSG_ID"
           if [ -n "$MSG_ID" ] && [ "$MSG_ID" != "null" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
-              -d chat_id="$GROUP_CHAT_ID" \
-              -d from_chat_id="$CHAT_ID" \
-              -d message_id="$MSG_ID"
+              -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$MSG_ID"
           fi
         fi
