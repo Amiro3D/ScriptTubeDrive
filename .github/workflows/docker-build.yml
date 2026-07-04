@@ -8,12 +8,12 @@ on:
       - 'Dockerfile'
       - '.github/workflows/docker-build.yml'
   schedule:
-    - cron: '0 0 * * 0'   # weekly rebuild (optional)
-  workflow_dispatch:      # manual trigger
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}  # e.g., Amiro3D/ScriptTubeDrive
+  IMAGE_NAME: amiro3d/scripttubedrive
 
 jobs:
   build:
