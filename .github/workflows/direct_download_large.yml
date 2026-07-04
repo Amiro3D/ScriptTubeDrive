@@ -17,43 +17,12 @@ jobs:
   download-and-send:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    container:
+      image: ghcr.io/amiro3d/scripttubedrive-tools:latest
 
     steps:
-    - name: Checkout
+    - name: Checkout (for cookies.txt)
       uses: actions/checkout@v4
-
-    # ---------- Caching ----------
-    - name: Cache pip packages
-      uses: actions/cache@v4
-      id: pip-cache
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-ytdlp-v2
-        restore-keys: |
-          ${{ runner.os }}-pip-ytdlp-
-
-    - name: Cache Deno
-      uses: actions/cache@v4
-      id: deno-cache
-      with:
-        path: ~/.deno
-        key: ${{ runner.os }}-deno-v1
-        restore-keys: |
-          ${{ runner.os }}-deno-
-
-    # ---------- Install tools ----------
-    - name: Install yt-dlp, Deno, and FFmpeg
-      run: |
-        sudo apt update
-        sudo apt install -y --no-install-recommends ffmpeg
-        pip install yt-dlp
-        if [ ! -f "$HOME/.deno/bin/deno" ]; then
-          echo "Deno not in cache, installing..."
-          curl -fsSL https://deno.land/install.sh | sh
-        else
-          echo "Deno found in cache, skipping install."
-        fi
-        echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
     # ---------- Run Telegram Bot API via Docker ----------
     - name: Run Telegram Bot API via Docker
@@ -62,10 +31,10 @@ jobs:
           --name telegram-bot-api \
           -p 8081:8081 \
           -e TELEGRAM_API_ID=32919068 \
-          -e TELEGRAM_API_HASH="824126c0da44d9c3843ff18ba777e175" \
+          -e TELEGRAM_API_HASH="${{ secrets.TELEGRAM_API_HASH }}" \
           -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
           aiogram/telegram-bot-api:latest
-        for i in {1..10}; do
+        for i in {1..15}; do
           if curl -s http://localhost:8081/ping > /dev/null 2>&1; then
             echo "Telegram Bot API started."
             break
