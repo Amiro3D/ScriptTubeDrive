@@ -22,7 +22,14 @@ jobs:
     - name: Checkout (for cookies.txt)
       uses: actions/checkout@v4
 
-    # ---------- Cache yt-dlp and Deno ----------
+    # ---------- Cache all tools ----------
+    - name: Cache ffmpeg
+      uses: actions/cache@v4
+      id: ffmpeg-cache
+      with:
+        path: /usr/local/bin/ffmpeg
+        key: ffmpeg-static-v1
+
     - name: Cache yt-dlp
       uses: actions/cache@v4
       id: ytdlp-cache
@@ -37,14 +44,18 @@ jobs:
         path: ~/.deno
         key: deno-linux-x64-v1
 
-    # ---------- Install tools ----------
+    # ---------- Install tools (only on cache miss) ----------
     - name: Install tools
       run: |
-        # FFmpeg (if not already installed)
-        if ! command -v ffmpeg &> /dev/null; then
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        # FFmpeg static binary (skip apt-get entirely)
+        if [ ! -f /usr/local/bin/ffmpeg ]; then
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
+          cd /tmp && tar xf ffmpeg.tar.xz
+          sudo cp /tmp/ffmpeg-*-amd64-static/ffmpeg /usr/local/bin/ffmpeg
+          sudo chmod +x /usr/local/bin/ffmpeg
+          rm -rf /tmp/ffmpeg*
         fi
-        # yt-dlp standalone binary (no pip needed)
+        # yt-dlp standalone binary
         if [ ! -f /usr/local/bin/yt-dlp ]; then
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod +x /usr/local/bin/yt-dlp
@@ -54,7 +65,8 @@ jobs:
           curl -fsSL https://deno.land/install.sh | sh
         fi
         echo "$HOME/.deno/bin" >> $GITHUB_PATH
-        yt-dlp --version
+        echo "ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
+        echo "yt-dlp: $(yt-dlp --version)"
 
     # ---------- Run Telegram Bot API via Docker ----------
     - name: Run Telegram Bot API via Docker
@@ -102,7 +114,7 @@ jobs:
       id: title
       run: |
         URL="${{ steps.inputs.outputs.url }}"
-        RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt --js-runtimes deno --remote-components ejs:github 2>/dev/null || echo "YouTube_Video")
+        RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt --js-runtimes deno 2>/dev/null || echo "YouTube_Video")
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | cut -c1-100)
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
         echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
@@ -131,7 +143,6 @@ jobs:
           --merge-output-format mp4 \
           --cookies cookies.txt \
           --js-runtimes deno \
-          --remote-components ejs:github \
           -o "${SAFE_TITLE}.%(ext)s" "$URL"
 
         if [ "$QUALITY" = "audio" ]; then
