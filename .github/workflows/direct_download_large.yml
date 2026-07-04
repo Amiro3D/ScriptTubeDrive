@@ -30,7 +30,7 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         options: >-
-          --health-cmd "curl -s http://localhost:8081/ping || exit 1"
+          --health-cmd "wget -q --spider http://localhost:8081/ping || exit 1"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
