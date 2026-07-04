@@ -313,21 +313,16 @@ jobs:
 
         report 100 "done" "$FILE_SIZE" "$QUALITY"
 
-        # Forward to group if provided
+        # Forward thumbnail + video to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
-          if [ -n "$THUMB_MSG_ID" ]; then
-            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
-              -d chat_id="$GROUP_CHAT_ID" \
-              -d from_chat_id="$CHAT_ID" \
-              -d message_id="$THUMB_MSG_ID"
-          fi
+          # Forward the thumbnail/status message
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
+            -d chat_id="$GROUP_CHAT_ID" \
+            -d from_chat_id="$CHAT_ID" \
+            -d message_id="$PROGRESS_MSG_ID"
+          # Forward the video
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
             -d chat_id="$GROUP_CHAT_ID" \
             -d from_chat_id="$CHAT_ID" \
             -d message_id="$MSG_ID"
         fi
-
-        # Delete progress message
-        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
-          -d chat_id="$CHAT_ID" \
-          -d message_id="$PROGRESS_MSG_ID"
