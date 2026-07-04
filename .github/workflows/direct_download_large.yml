@@ -76,11 +76,28 @@ jobs:
           exit 1
         fi
 
+    # ---------- Resolve inputs ----------
+    - name: Resolve inputs
+      id: inputs
+      run: |
+        URL="${{ github.event.client_payload.url || inputs.url }}"
+        QUALITY="${{ github.event.client_payload.quality || inputs.quality || '720' }}"
+        CHAT_ID="${{ github.event.client_payload.chat_id || '' }}"
+        PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
+        THUMB_MSG_ID="${{ github.event.client_payload.thumbnail_msg_id || '' }}"
+        GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
+        echo "url=${URL}" >> $GITHUB_OUTPUT
+        echo "quality=${QUALITY}" >> $GITHUB_OUTPUT
+        echo "chat_id=${CHAT_ID}" >> $GITHUB_OUTPUT
+        echo "progress_msg_id=${PROGRESS_MSG_ID}" >> $GITHUB_OUTPUT
+        echo "thumb_msg_id=${THUMB_MSG_ID}" >> $GITHUB_OUTPUT
+        echo "group_chat_id=${GROUP_CHAT_ID}" >> $GITHUB_OUTPUT
+
     # ---------- Get video title ----------
     - name: Get video title
       id: title
       run: |
-        URL="${{ github.event.client_payload.url }}"
+        URL="${{ steps.inputs.outputs.url }}"
         RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt --js-runtimes deno --remote-components ejs:github 2>/dev/null || echo "YouTube_Video")
         SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | cut -c1-100)
         echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
@@ -90,8 +107,8 @@ jobs:
     - name: Download and optimize video
       id: download
       run: |
-        URL="${{ github.event.client_payload.url }}"
-        QUALITY="${{ github.event.client_payload.quality || '720' }}"
+        URL="${{ steps.inputs.outputs.url }}"
+        QUALITY="${{ steps.inputs.outputs.quality }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
 
         case "$QUALITY" in
@@ -129,11 +146,11 @@ jobs:
     - name: Send to Telegram
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        CHAT_ID: ${{ github.event.client_payload.chat_id }}
-        PROGRESS_MSG_ID: ${{ github.event.client_payload.progress_msg_id }}
+        CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
+        PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
         TITLE: ${{ steps.title.outputs.raw_title }}
-        GROUP_CHAT_ID: ${{ github.event.client_payload.group_chat_id || '' }}
-        THUMB_MSG_ID: ${{ github.event.client_payload.thumbnail_msg_id || '' }}
+        GROUP_CHAT_ID: ${{ steps.inputs.outputs.group_chat_id }}
+        THUMB_MSG_ID: ${{ steps.inputs.outputs.thumb_msg_id }}
       run: |
         FILE="${{ steps.download.outputs.video_file }}"
         EXT="${FILE##*.}"
