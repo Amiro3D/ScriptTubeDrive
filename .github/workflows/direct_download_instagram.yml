@@ -125,7 +125,7 @@ jobs:
           else
             gallery-dl -d /tmp/ig_download "$URL" 2>&1 || true
           fi
-          find /tmp/ig_download -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.mp4" \) -exec sh -c 'mv "$1" /tmp/ig_download/ 2>/dev/null' _ {} \; 2>/dev/null || true
+          find /tmp/ig_download -mindepth 2 -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.mp4" \) -exec mv {} /tmp/ig_download/ \; 2>/dev/null || true
           find /tmp/ig_download -mindepth 1 -type d -empty -delete 2>/dev/null || true
           FILE_COUNT=0
           for f in *; do [ -f "$f" ] && FILE_COUNT=$((FILE_COUNT + 1)); done
@@ -184,15 +184,7 @@ jobs:
           done
           MEDIA_JSON+="]"
           echo "$MEDIA_JSON" > /tmp/media.json
-          RESP=$(python3 -c "
-import subprocess, sys
-mj = open('/tmp/media.json').read().strip()
-args = ['curl', '-s', '-X', 'POST', 'http://localhost:8081/bot${BOT_TOKEN}/sendMediaGroup', '-F', 'chat_id=${CHAT_ID}']
-for i in range(4, len(sys.argv)):
-    args.extend(['-F', 'media=@' + sys.argv[i]])
-args.extend(['-F', 'media=' + mj])
-print(subprocess.run(args, capture_output=True, text=True).stdout)
-" "${MEDIA_FILES[@]}")
+          RESP=$(python3 "$GITHUB_WORKSPACE/scripts/send_album.py" "$MEDIA_JSON" "$CHAT_ID" "$BOT_TOKEN" "${MEDIA_FILES[@]}")
           rm -f /tmp/media.json
           MSG_ID=$(echo "$RESP" | jq -r '.result[0].message_id')
         fi
