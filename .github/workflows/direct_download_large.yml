@@ -20,33 +20,24 @@ jobs:
     container:
       image: ghcr.io/amiro3d/scripttubedrive-tools:latest
 
+    services:
+      telegram-bot-api:
+        image: aiogram/telegram-bot-api:latest
+        ports:
+          - 8081:8081
+        env:
+          TELEGRAM_API_ID: 32919068
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        options: >-
+          --health-cmd "curl -s http://localhost:8081/ping || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
     - name: Checkout (for cookies.txt)
       uses: actions/checkout@v4
-
-    # ---------- Run Telegram Bot API via Docker ----------
-    - name: Run Telegram Bot API via Docker
-      run: |
-        docker run -d \
-          --name telegram-bot-api \
-          -p 8081:8081 \
-          -e TELEGRAM_API_ID=32919068 \
-          -e TELEGRAM_API_HASH="${{ secrets.TELEGRAM_API_HASH }}" \
-          -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
-          aiogram/telegram-bot-api:latest
-        for i in {1..15}; do
-          if curl -s http://localhost:8081/ping > /dev/null 2>&1; then
-            echo "Telegram Bot API started."
-            break
-          fi
-          echo "Waiting... ($i)"
-          sleep 2
-        done
-        if ! curl -s http://localhost:8081/ping > /dev/null 2>&1; then
-          echo "ERROR: Failed to start Telegram Bot API via Docker."
-          docker logs telegram-bot-api
-          exit 1
-        fi
 
     # ---------- Get video title ----------
     - name: Get video title
