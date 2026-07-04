@@ -118,7 +118,6 @@ jobs:
           fi
         done
         if [ "$FILE_COUNT" -eq 0 ]; then
-          echo "yt-dlp got no files, trying gallery-dl..."
           pip install -q gallery-dl 2>/dev/null || true
           if [ -n "$COOKIES_FILE" ]; then
             gallery-dl --cookies "$COOKIES_FILE" -d /tmp/ig_download "$URL" 2>&1 || true
@@ -158,36 +157,20 @@ jobs:
         }
         report 95 "uploading"
         cd /tmp/ig_download
-        MEDIA_FILES=()
-        for f in *.mp4 *.webm *.mkv *.jpg *.png; do
+        MSG_ID=""
+        for f in *.mp4 *.webm *.mkv; do
+          [ -f "$f" ] || continue
+          RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
+          MID=$(echo "$RESP" | jq -r '.result.message_id')
+          [ -z "$MSG_ID" ] && [ -n "$MID" ] && [ "$MID" != "null" ] && MSG_ID="$MID"
+        done
+        for f in *.jpg *.png; do
           [ -f "$f" ] || continue
           [[ "$f" == ig_* ]] && continue
-          MEDIA_FILES+=("$f")
+          RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" -F chat_id="$CHAT_ID" -F photo=@"$f")
+          MID=$(echo "$RESP" | jq -r '.result.message_id')
+          [ -z "$MSG_ID" ] && [ -n "$MID" ] && [ "$MID" != "null" ] && MSG_ID="$MID"
         done
-        FILE_TOTAL=${#MEDIA_FILES[@]}
-        MSG_ID=""
-        if [ "$FILE_TOTAL" -eq 1 ]; then
-          f="${MEDIA_FILES[0]}"
-          if [[ "$f" == *.mp4 ]] || [[ "$f" == *.webm ]] || [[ "$f" == *.mkv ]]; then
-            RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
-          else
-            RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" -F chat_id="$CHAT_ID" -F photo=@"$f")
-          fi
-          MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
-        elif [ "$FILE_TOTAL" -gt 1 ]; then
-          MEDIA_JSON="["
-          FIRST=true
-          for f in "${MEDIA_FILES[@]}"; do
-            if [[ "$f" == *.mp4 ]] || [[ "$f" == *.webm ]] || [[ "$f" == *.mkv ]]; then TYPE="video"; else TYPE="photo"; fi
-            if [ "$FIRST" = true ]; then FIRST=false; else MEDIA_JSON+=","; fi
-            MEDIA_JSON+="{\"type\":\"${TYPE}\",\"media\":\"attach://${f}\"}"
-          done
-          MEDIA_JSON+="]"
-          echo "$MEDIA_JSON" > /tmp/media.json
-          RESP=$(python3 "$GITHUB_WORKSPACE/scripts/send_album.py" /tmp/media.json "$CHAT_ID" "$BOT_TOKEN" "${MEDIA_FILES[@]}")
-          rm -f /tmp/media.json
-          MSG_ID=$(echo "$RESP" | jq -r '.result[0].message_id')
-        fi
         if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
           report 0 "error"
           exit 1
