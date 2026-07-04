@@ -184,7 +184,7 @@ jobs:
           done
           MEDIA_JSON+="]"
           echo "$MEDIA_JSON" > /tmp/media.json
-          RESP=$(python3 "$GITHUB_WORKSPACE/scripts/send_album.py" "$MEDIA_JSON" "$CHAT_ID" "$BOT_TOKEN" "${MEDIA_FILES[@]}")
+          RESP=$(python3 "$GITHUB_WORKSPACE/scripts/send_album.py" /tmp/media.json "$CHAT_ID" "$BOT_TOKEN" "${MEDIA_FILES[@]}")
           rm -f /tmp/media.json
           MSG_ID=$(echo "$RESP" | jq -r '.result[0].message_id')
         fi
