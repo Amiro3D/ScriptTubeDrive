@@ -185,7 +185,7 @@ jobs:
           EXT="mp3"
           FINAL_NAME="${SAFE_TITLE}.${EXT}"
           cp "${SAFE_TITLE}.${EXT}" "$FINAL_NAME"
-          FILE_SIZE=$(du -h "$FINAL_NAME" | cut -f1)
+          FILE_SIZE=$(du -h "$FINAL_NAME" | cut -f1 | sed 's/M$/MB/' | sed 's/G$/GB/')
           echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
           echo "file_size=${FILE_SIZE}" >> $GITHUB_OUTPUT
           echo "duration=0" >> $GITHUB_OUTPUT
