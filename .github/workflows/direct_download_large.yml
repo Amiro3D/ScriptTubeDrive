@@ -17,7 +17,7 @@ jobs:
   download-and-send:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/${{ github.repository }}:latest
+      image: ghcr.io/amiro3d/scripttubedrive:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -27,7 +27,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # No more installation steps – everything is pre-installed in the container.
+    # No install steps – everything is pre-installed.
 
     - name: Run Telegram Bot API via Docker
       run: |
