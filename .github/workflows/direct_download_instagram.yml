@@ -124,12 +124,18 @@ jobs:
         report 20 "downloading"
 
         # Download with yt-dlp - get all items in carousel
+        COOKIES_FILE=""
+        if [ -f "$GITHUB_WORKSPACE/instagram_cookies.txt" ]; then
+          COOKIES_FILE="$GITHUB_WORKSPACE/instagram_cookies.txt"
+        fi
+
         yt-dlp \
           --write-thumbnail \
           --convert-thumbnails jpg \
           -o "ig_%(id)s.%(ext)s" \
           --no-overwrites \
           --ignore-errors \
+          ${COOKIES_FILE:+--cookies "$COOKIES_FILE"} \
           "$URL" 2>&1 || true
 
         report 70 "downloading"
