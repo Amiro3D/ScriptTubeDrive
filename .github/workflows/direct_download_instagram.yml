@@ -221,38 +221,67 @@ jobs:
 
         cd /tmp/ig_download
 
-        MSG_ID=""
-        SENT_COUNT=0
-
-        # Send videos first
-        for f in *.mp4 *.webm *.mkv; do
-          [ -f "$f" ] || continue
-          RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" \
-            -F chat_id="$CHAT_ID" \
-            -F video=@"$f" \
-            -F supports_streaming=true)
-          MID=$(echo "$RESP" | jq -r '.result.message_id')
-          if [ -n "$MID" ] && [ "$MID" != "null" ]; then
-            [ -z "$MSG_ID" ] && MSG_ID="$MID"
-            SENT_COUNT=$((SENT_COUNT + 1))
-          fi
-        done
-
-        # Send photos (skip yt-dlp thumbnails prefixed with ig_)
-        for f in *.jpg *.png; do
+        # Collect all media files (excluding yt-dlp thumbnails)
+        MEDIA_FILES=()
+        for f in *.mp4 *.webm *.mkv *.jpg *.png; do
           [ -f "$f" ] || continue
           [[ "$f" == ig_* ]] && continue
-          RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" \
-            -F chat_id="$CHAT_ID" \
-            -F photo=@"$f")
-          MID=$(echo "$RESP" | jq -r '.result.message_id')
-          if [ -n "$MID" ] && [ "$MID" != "null" ]; then
-            [ -z "$MSG_ID" ] && MSG_ID="$MID"
-            SENT_COUNT=$((SENT_COUNT + 1))
-          fi
+          MEDIA_FILES+=("$f")
         done
 
-        if [ "$SENT_COUNT" -eq 0 ]; then
+        FILE_TOTAL=${#MEDIA_FILES[@]}
+        MSG_ID=""
+
+        if [ "$FILE_TOTAL" -eq 1 ]; then
+          # Single file - send as video or photo
+          f="${MEDIA_FILES[0]}"
+          if [[ "$f" == *.mp4 ]] || [[ "$f" == *.webm ]] || [[ "$f" == *.mkv ]]; then
+            RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" \
+              -F chat_id="$CHAT_ID" \
+              -F video=@"$f" \
+              -F supports_streaming=true)
+          else
+            RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" \
+              -F chat_id="$CHAT_ID" \
+              -F photo=@"$f")
+          fi
+          MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
+        elif [ "$FILE_TOTAL" -gt 1 ]; then
+          # Multiple files - send as media group via stdin
+          MEDIA_JSON="["
+          FIRST=true
+          for f in "${MEDIA_FILES[@]}"; do
+            if [[ "$f" == *.mp4 ]] || [[ "$f" == *.webm ]] || [[ "$f" == *.mkv ]]; then
+              TYPE="video"
+            else
+              TYPE="photo"
+            fi
+            if [ "$FIRST" = true ]; then FIRST=false; else MEDIA_JSON+=","; fi
+            MEDIA_JSON+="{\"type\":\"${TYPE}\",\"media\":\"attach://${f}\"}"
+          done
+          MEDIA_JSON+="]"
+
+          # Build curl args file (avoids eval quoting issues)
+          ARGS_FILE=$(mktemp)
+          echo "-s" > "$ARGS_FILE"
+          echo "-X" >> "$ARGS_FILE"
+          echo "POST" >> "$ARGS_FILE"
+          echo "http://localhost:8081/bot${BOT_TOKEN}/sendMediaGroup" >> "$ARGS_FILE"
+          echo "-F" >> "$ARGS_FILE"
+          echo "chat_id=${CHAT_ID}" >> "$ARGS_FILE"
+          for f in "${MEDIA_FILES[@]}"; do
+            echo "-F" >> "$ARGS_FILE"
+            echo "media=@${f}" >> "$ARGS_FILE"
+          done
+          echo "-F" >> "$ARGS_FILE"
+          echo "media=${MEDIA_JSON}" >> "$ARGS_FILE"
+
+          RESP=$(xargs < "$ARGS_FILE" curl)
+          rm -f "$ARGS_FILE"
+          MSG_ID=$(echo "$RESP" | jq -r '.result[0].message_id')
+        fi
+
+        if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
           report 0 "error"
           exit 1
         fi
