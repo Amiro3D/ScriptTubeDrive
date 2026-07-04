@@ -222,6 +222,17 @@ jobs:
           echo "width=${WIDTH:-0}" >> $GITHUB_OUTPUT
           echo "height=${HEIGHT:-0}" >> $GITHUB_OUTPUT
           echo "thumb=${THUMB_FILE}" >> $GITHUB_OUTPUT
+
+          # Determine display quality from actual resolution
+          if [ "$QUALITY" = "best" ] && [ -n "$HEIGHT" ] && [ "$HEIGHT" != "0" ]; then
+            DISPLAY_QUALITY="${HEIGHT}p"
+          elif [ "$QUALITY" = "audio" ]; then
+            DISPLAY_QUALITY="audio"
+          else
+            DISPLAY_QUALITY="${QUALITY}p"
+          fi
+          echo "display_quality=${DISPLAY_QUALITY}" >> $GITHUB_OUTPUT
+          echo "Display quality: ${DISPLAY_QUALITY}"
           echo "Metadata: duration=${DURATION:-0}s, ${WIDTH:-0}x${HEIGHT:-0}, size=${FILE_SIZE}"
         fi
 
@@ -241,7 +252,7 @@ jobs:
         HEIGHT: ${{ steps.download.outputs.height }}
         THUMB_FILE: ${{ steps.download.outputs.thumb }}
         FILE_SIZE: ${{ steps.download.outputs.file_size }}
-        QUALITY: ${{ steps.inputs.outputs.quality }}
+        DISPLAY_QUALITY: ${{ steps.download.outputs.display_quality }}
       run: |
         WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
         report() {
@@ -311,7 +322,7 @@ jobs:
           exit 1
         fi
 
-        report 100 "done" "$FILE_SIZE" "$QUALITY"
+        report 100 "done" "$FILE_SIZE" "$DISPLAY_QUALITY"
 
         # Forward thumbnail + video to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
