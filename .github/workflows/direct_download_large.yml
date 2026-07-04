@@ -17,27 +17,64 @@ jobs:
   download-and-send:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    container:
-      image: ghcr.io/amiro3d/scripttubedrive-tools:latest
-
-    services:
-      telegram-bot-api:
-        image: aiogram/telegram-bot-api:latest
-        ports:
-          - 8081:8081
-        env:
-          TELEGRAM_API_ID: 32919068
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        options: >-
-          --health-cmd "wget -q --spider http://localhost:8081/ping || exit 1"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
 
     steps:
     - name: Checkout (for cookies.txt)
       uses: actions/checkout@v4
+
+    # ---------- Cache yt-dlp and Deno ----------
+    - name: Cache yt-dlp
+      uses: actions/cache@v4
+      id: ytdlp-cache
+      with:
+        path: /usr/local/bin/yt-dlp
+        key: ytdlp-standalone-v1
+
+    - name: Cache Deno
+      uses: actions/cache@v4
+      id: deno-cache
+      with:
+        path: ~/.deno
+        key: deno-linux-x64-v1
+
+    # ---------- Install tools ----------
+    - name: Install tools
+      run: |
+        # yt-dlp standalone binary (no pip needed)
+        if [ ! -f /usr/local/bin/yt-dlp ]; then
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod +x /usr/local/bin/yt-dlp
+        fi
+        # Deno
+        if [ ! -f "$HOME/.deno/bin/deno" ]; then
+          curl -fsSL https://deno.land/install.sh | sh
+        fi
+        echo "$HOME/.deno/bin" >> $GITHUB_PATH
+        yt-dlp --version
+
+    # ---------- Run Telegram Bot API via Docker ----------
+    - name: Run Telegram Bot API via Docker
+      run: |
+        docker run -d \
+          --name telegram-bot-api \
+          -p 8081:8081 \
+          -e TELEGRAM_API_ID=32919068 \
+          -e TELEGRAM_API_HASH="${{ secrets.TELEGRAM_API_HASH }}" \
+          -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+          aiogram/telegram-bot-api:latest
+        for i in {1..20}; do
+          if curl -s http://localhost:8081/ping > /dev/null 2>&1; then
+            echo "Telegram Bot API started."
+            break
+          fi
+          echo "Waiting... ($i)"
+          sleep 2
+        done
+        if ! curl -s http://localhost:8081/ping > /dev/null 2>&1; then
+          echo "ERROR: Failed to start Telegram Bot API via Docker."
+          docker logs telegram-bot-api
+          exit 1
+        fi
 
     # ---------- Get video title ----------
     - name: Get video title
@@ -56,7 +93,7 @@ jobs:
         URL="${{ github.event.client_payload.url }}"
         QUALITY="${{ github.event.client_payload.quality || '720' }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
-        
+
         case "$QUALITY" in
           "144")  F="-f bestvideo[height<=144]+bestaudio/best[height<=144]" ;;
           "240")  F="-f bestvideo[height<=240]+bestaudio/best[height<=240]" ;;
@@ -68,14 +105,14 @@ jobs:
           "audio") F="-x --audio-format mp3" ;;
           *)      F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
-        
+
         yt-dlp $F \
           --merge-output-format mp4 \
           --cookies cookies.txt \
           --js-runtimes deno \
           --remote-components ejs:github \
           -o "${SAFE_TITLE}.%(ext)s" "$URL"
-        
+
         if [ "$QUALITY" = "audio" ]; then
           EXT="mp3"
           FINAL_NAME="${SAFE_TITLE}.${EXT}"
