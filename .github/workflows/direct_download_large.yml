@@ -110,6 +110,22 @@ jobs:
         echo "thumb_msg_id=${THUMB_MSG_ID}" >> $GITHUB_OUTPUT
         echo "group_chat_id=${GROUP_CHAT_ID}" >> $GITHUB_OUTPUT
 
+    # ---------- Report progress helper ----------
+    - name: Report progress
+      id: progress
+      run: |
+        report_progress() {
+          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
+            curl -s -X POST "https://bitter-wind-2755.ame315898036.workers.dev/progress" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
+          fi
+        }
+        echo "CHAT_ID=${{ steps.inputs.outputs.chat_id }}" >> $GITHUB_OUTPUT
+        echo "PROGRESS_MSG_ID=${{ steps.inputs.outputs.progress_msg_id }}" >> $GITHUB_OUTPUT
+        # Test connectivity
+        report_progress 0 "downloading"
+
     # ---------- Get video title ----------
     - name: Get video title
       id: title
@@ -123,10 +139,24 @@ jobs:
     # ---------- Download and optimize video ----------
     - name: Download and optimize video
       id: download
+      env:
+        CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
+        PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
       run: |
+        WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
+        report() {
+          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
+            curl -s -X POST "$WORKER_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
+          fi
+        }
+
         URL="${{ steps.inputs.outputs.url }}"
         QUALITY="${{ steps.inputs.outputs.quality }}"
         SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
+
+        report 10 "downloading"
 
         case "$QUALITY" in
           "144")  F="-f bestvideo[height<=144]+bestaudio/best[height<=144]" ;;
@@ -140,6 +170,8 @@ jobs:
           *)      F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
 
+        report 20 "downloading"
+
         yt-dlp $F \
           --merge-output-format mp4 \
           --write-thumbnail --convert-thumbnails jpg \
@@ -147,11 +179,15 @@ jobs:
           --js-runtimes deno \
           -o "${SAFE_TITLE}.%(ext)s" "$URL"
 
+        report 60 "downloading"
+
         if [ "$QUALITY" = "audio" ]; then
           EXT="mp3"
           FINAL_NAME="${SAFE_TITLE}.${EXT}"
           cp "${SAFE_TITLE}.${EXT}" "$FINAL_NAME"
+          FILE_SIZE=$(du -h "$FINAL_NAME" | cut -f1)
           echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          echo "file_size=${FILE_SIZE}" >> $GITHUB_OUTPUT
           echo "duration=0" >> $GITHUB_OUTPUT
           echo "width=0" >> $GITHUB_OUTPUT
           echo "height=0" >> $GITHUB_OUTPUT
@@ -159,8 +195,12 @@ jobs:
         else
           EXT="mp4"
           INPUT="${SAFE_TITLE}.${EXT}"
+          report 70 "downloading"
           ffmpeg -i "$INPUT" -c copy -movflags +faststart "${SAFE_TITLE}_stream.mp4"
           FINAL_NAME="${SAFE_TITLE}_stream.${EXT}"
+
+          FILE_SIZE=$(du -h "$FINAL_NAME" | cut -f1)
+          report 90 "downloading"
 
           # Extract metadata for Telegram
           DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${SAFE_TITLE}_stream.mp4" 2>/dev/null | cut -d. -f1)
@@ -177,12 +217,15 @@ jobs:
           done
 
           echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          echo "file_size=${FILE_SIZE}" >> $GITHUB_OUTPUT
           echo "duration=${DURATION:-0}" >> $GITHUB_OUTPUT
           echo "width=${WIDTH:-0}" >> $GITHUB_OUTPUT
           echo "height=${HEIGHT:-0}" >> $GITHUB_OUTPUT
           echo "thumb=${THUMB_FILE}" >> $GITHUB_OUTPUT
-          echo "Metadata: duration=${DURATION:-0}s, ${WIDTH:-0}x${HEIGHT:-0}, thumb=${THUMB_FILE:-none}"
+          echo "Metadata: duration=${DURATION:-0}s, ${WIDTH:-0}x${HEIGHT:-0}, size=${FILE_SIZE}"
         fi
+
+        report 95 "downloading"
 
     # ---------- Send to Telegram (with retry on rate limit) ----------
     - name: Send to Telegram
@@ -197,12 +240,25 @@ jobs:
         WIDTH: ${{ steps.download.outputs.width }}
         HEIGHT: ${{ steps.download.outputs.height }}
         THUMB_FILE: ${{ steps.download.outputs.thumb }}
+        FILE_SIZE: ${{ steps.download.outputs.file_size }}
+        QUALITY: ${{ steps.inputs.outputs.quality }}
       run: |
+        WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
+        report() {
+          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
+            curl -s -X POST "$WORKER_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
+          fi
+        }
+
+        report 98 "uploading"
+
         FILE="${{ steps.download.outputs.video_file }}"
         EXT="${FILE##*.}"
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
 
-        echo "Sending file: $FILE (duration=${DURATION}s, ${WIDTH}x${HEIGHT}, thumb=${THUMB_FILE:-none})"
+        echo "Sending file: $FILE (size=${FILE_SIZE}, duration=${DURATION}s, ${WIDTH}x${HEIGHT})"
         MAX_RETRIES=3
         for i in $(seq 1 $MAX_RETRIES); do
           if [ "$EXT" = "mp4" ]; then
@@ -218,14 +274,12 @@ jobs:
               -F width="$WIDTH" \
               -F height="$HEIGHT" \
               -F supports_streaming=true \
-              -F caption="🎬 *${TITLE}*" \
-              -F parse_mode="Markdown")
+              -F caption="🎬 ${TITLE}")
           else
             RESP=$(curl -s -X POST "${API_URL}/sendDocument" \
               -F chat_id="$CHAT_ID" \
               -F document=@"$FILE" \
-              -F caption="🎵 *${TITLE}*" \
-              -F parse_mode="Markdown")
+              -F caption="🎵 ${TITLE}")
           fi
           MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
           if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
@@ -237,19 +291,12 @@ jobs:
                 sleep $((RETRY_AFTER + 2))
                 continue
               else
-                echo "Rate limit too long ($RETRY_AFTER seconds). Not waiting."
-                MESSAGE="⚠️ Telegram is currently rate-limiting. Please try again later."
-                curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-                  -d chat_id="$CHAT_ID" \
-                  -d text="$MESSAGE" \
-                  -d parse_mode="Markdown"
-                curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" \
-                  -d chat_id="$CHAT_ID" \
-                  -d message_id="$PROGRESS_MSG_ID"
+                report 0 "error"
                 exit 1
               fi
             else
               echo "ERROR: Failed to send file. Response: $RESP"
+              report 0 "error"
               exit 1
             fi
           else
@@ -260,8 +307,11 @@ jobs:
 
         if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
           echo "ERROR: Failed to send file after $MAX_RETRIES attempts."
+          report 0 "error"
           exit 1
         fi
+
+        report 100 "done" "$FILE_SIZE" "$QUALITY"
 
         # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
