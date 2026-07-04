@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install yt-dlp
-RUN pip3 install yt-dlp --upgrade
+# Install yt-dlp (allow system package override)
+RUN pip3 install yt-dlp --upgrade --break-system-packages
 
 # Install Deno (required for yt-dlp JS challenges)
 RUN curl -fsSL https://deno.land/install.sh | sh
