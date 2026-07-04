@@ -166,7 +166,7 @@ jobs:
         done
         for f in *.jpg *.png; do
           [ -f "$f" ] || continue
-          [[ "$f" == ig_* ]] && continue
+          if [[ "$f" == ig_* ]]; then continue; fi
           RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" -F chat_id="$CHAT_ID" -F photo=@"$f")
           MID=$(echo "$RESP" | jq -r '.result.message_id')
           [ -z "$MSG_ID" ] && [ -n "$MID" ] && [ "$MID" != "null" ] && MSG_ID="$MID"
