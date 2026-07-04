@@ -161,15 +161,13 @@ jobs:
         for f in *.mp4 *.webm *.mkv; do
           [ -f "$f" ] || continue
           RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendVideo" -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
-          MID=$(echo "$RESP" | jq -r '.result.message_id')
-          [ -z "$MSG_ID" ] && [ -n "$MID" ] && [ "$MID" != "null" ] && MSG_ID="$MID"
+          if [ -z "$MSG_ID" ]; then MID=$(echo "$RESP" | jq -r '.result.message_id'); [ -n "$MID" ] && [ "$MID" != "null" ] && MSG_ID="$MID"; fi
         done
         for f in *.jpg *.png; do
           [ -f "$f" ] || continue
           if [[ "$f" == ig_* ]]; then continue; fi
           RESP=$(curl -s -X POST "http://localhost:8081/bot${BOT_TOKEN}/sendPhoto" -F chat_id="$CHAT_ID" -F photo=@"$f")
-          MID=$(echo "$RESP" | jq -r '.result.message_id')
-          [ -z "$MSG_ID" ] && [ -n "$MID" ] && [ "$MID" != "null" ] && MSG_ID="$MID"
+          if [ -z "$MSG_ID" ]; then MID=$(echo "$RESP" | jq -r '.result.message_id'); [ -n "$MID" ] && [ "$MID" != "null" ] && MSG_ID="$MID"; fi
         done
         if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
           report 0 "error"
