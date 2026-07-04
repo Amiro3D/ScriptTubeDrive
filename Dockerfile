@@ -8,9 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     ca-certificates \
     unzip \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# yt-dlp standalone binary (no pip, no python needed)
+# yt-dlp standalone binary
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod +x /usr/local/bin/yt-dlp
 
