@@ -1,0 +1,190 @@
+name: GitHub Downloader
+
+on:
+  repository_dispatch:
+    types: [direct_download_github]
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'GitHub repo or release URL'
+        required: true
+
+jobs:
+  download-and-send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - name: Resolve inputs
+      id: inputs
+      run: |
+        URL="${{ github.event.client_payload.url || inputs.url }}"
+        CHAT_ID="${{ github.event.client_payload.chat_id || '102332059' }}"
+        PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
+        GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
+
+        IS_RELEASE=false
+        if echo "$URL" | grep -qE '/releases/tag/'; then
+          IS_RELEASE=true
+          OWNER=$(echo "$URL" | cut -d/ -f4)
+          REPO=$(echo "$URL" | cut -d/ -f5)
+          TAG=$(echo "$URL" | grep -oP '/releases/tag/\K[^?]+')
+          DOWNLOAD_URL="https://github.com/${OWNER}/${REPO}/releases/download/${TAG}"
+          FILENAME="${REPO}-${TAG}"
+        else
+          OWNER=$(echo "$URL" | cut -d/ -f4)
+          REPO=$(echo "$URL" | cut -d/ -f5 | sed 's/\.git$//')
+          DOWNLOAD_URL="https://github.com/${OWNER}/${REPO}/archive/refs/heads/main.zip"
+          FILENAME="${REPO}-main"
+        fi
+
+        echo "url=${URL}" >> $GITHUB_OUTPUT
+        echo "owner=${OWNER}" >> $GITHUB_OUTPUT
+        echo "repo=${REPO}" >> $GITHUB_OUTPUT
+        echo "is_release=${IS_RELEASE}" >> $GITHUB_OUTPUT
+        echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
+        echo "filename=${FILENAME}" >> $GITHUB_OUTPUT
+        echo "chat_id=${CHAT_ID}" >> $GITHUB_OUTPUT
+        echo "progress_msg_id=${PROGRESS_MSG_ID}" >> $GITHUB_OUTPUT
+        echo "group_chat_id=${GROUP_CHAT_ID}" >> $GITHUB_OUTPUT
+
+    - name: Report progress
+      run: |
+        report() {
+          if [ -n "${{ steps.inputs.outputs.chat_id }}" ] && [ -n "${{ steps.inputs.outputs.progress_msg_id }}" ]; then
+            curl -s -X POST "https://bitter-wind-2755.ame315898036.workers.dev/progress" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"${{ steps.inputs.outputs.chat_id }}\",\"message_id\":\"${{ steps.inputs.outputs.progress_msg_id }}\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
+          fi
+        }
+        report 10 "downloading"
+
+    - name: Download from GitHub
+      id: download
+      run: |
+        cd /tmp
+        IS_RELEASE="${{ steps.inputs.outputs.is_release }}"
+        OWNER="${{ steps.inputs.outputs.owner }}"
+        REPO="${{ steps.inputs.outputs.repo }}"
+        DOWNLOAD_URL="${{ steps.inputs.outputs.download_url }}"
+        FILENAME="${{ steps.inputs.outputs.filename }}"
+
+        echo "Downloading: $DOWNLOAD_URL"
+
+        if [ "$IS_RELEASE" = "true" ]; then
+          TAG="${{ steps.inputs.outputs.url }}" 
+          TAG=$(echo "$TAG" | grep -oP '/releases/tag/\K[^?]+')
+          echo "Release tag: $TAG"
+
+          # Try to get release assets
+          API_URL="https://api.github.com/repos/${OWNER}/${REPO}/releases/tags/${TAG}"
+          RELEASE_JSON=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "$API_URL" 2>/dev/null || echo "{}")
+          ASSET_COUNT=$(echo "$RELEASE_JSON" | grep -o '"browser_download_url"' | wc -l)
+
+          if [ "$ASSET_COUNT" -gt 0 ]; then
+            echo "Found $ASSET_COUNT release assets"
+            mkdir -p gh_download && cd gh_download
+            echo "$RELEASE_JSON" | grep -o '"browser_download_url":"[^"]*"' | cut -d'"' -f4 | while read -r asset_url; do
+              echo "Downloading asset: $asset_url"
+              curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "$asset_url" -O 2>/dev/null || true
+            done
+          else
+            echo "No assets, downloading source tarball"
+            curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://github.com/${OWNER}/${REPO}/archive/refs/tags/${TAG}.tar.gz" \
+              -o "${FILENAME}.tar.gz" 2>/dev/null
+          fi
+        else
+          echo "Downloading repo source..."
+          mkdir -p gh_download && cd gh_download
+          curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://github.com/${OWNER}/${REPO}/archive/refs/heads/main.zip" \
+            -o "${FILENAME}.zip" 2>/dev/null
+
+          if [ ! -f "${FILENAME}.zip" ] || [ ! -s "${FILENAME}.zip" ]; then
+            echo "main branch not found, trying master..."
+            curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://github.com/${OWNER}/${REPO}/archive/refs/heads/master.zip" \
+              -o "${FILENAME}.zip" 2>/dev/null
+          fi
+        fi
+
+        cd /tmp/gh_download 2>/dev/null || cd /tmp
+        FILE_COUNT=0
+        TOTAL_SIZE=0
+        for f in *; do
+          if [ -f "$f" ]; then
+            FILE_COUNT=$((FILE_COUNT + 1))
+            TOTAL_SIZE=$(du -sh "$f" 2>/dev/null | cut -f1)
+          fi
+        done
+
+        echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
+        echo "total_size=${TOTAL_SIZE}" >> $GITHUB_OUTPUT
+        echo "Downloaded $FILE_COUNT files, total: $TOTAL_SIZE"
+
+    - name: Send to Telegram
+      env:
+        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
+        PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
+        GROUP_CHAT_ID: ${{ steps.inputs.outputs.group_chat_id }}
+        OWNER: ${{ steps.inputs.outputs.owner }}
+        REPO: ${{ steps.inputs.outputs.repo }}
+        IS_RELEASE: ${{ steps.inputs.outputs.is_release }}
+        TOTAL_SIZE: ${{ steps.download.outputs.total_size }}
+      run: |
+        WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
+        report() {
+          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
+            curl -s -X POST "$WORKER_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
+          fi
+        }
+        send_with_retry() {
+          local API_URL="$1"; shift
+          local MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            RESP=$(curl -s -X POST "$API_URL" "$@")
+            ERROR_CODE=$(echo "$RESP" | grep -o '"error_code":[0-9]*' | head -1 | cut -d: -f2)
+            if [ "$ERROR_CODE" = "429" ]; then
+              RETRY_AFTER=$(echo "$RESP" | grep -o '"retry_after":[0-9]*' | head -1 | cut -d: -f2)
+              RETRY_AFTER=${RETRY_AFTER:-60}
+              echo "Rate limited. Waiting ${RETRY_AFTER}s (attempt $i/$MAX_RETRIES)"
+              sleep $((RETRY_AFTER + 2))
+              continue
+            fi
+            echo "$RESP"
+            return 0
+          done
+          echo '{"ok":false}'
+          return 1
+        }
+
+        report 95 "uploading" || true
+        cd /tmp/gh_download 2>/dev/null || cd /tmp
+        API_URL="http://localhost:8081/bot${BOT_TOKEN}"
+        MSG_ID=""
+
+        ls -la || true
+
+        for f in *; do
+          [ -f "$f" ] || continue
+          echo "Sending file: $f"
+          RESP=$(send_with_retry "${API_URL}/sendDocument" -F chat_id="$CHAT_ID" -F document=@"$f")
+          MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
+          if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
+        done
+
+        echo "Final MSG_ID=$MSG_ID"
+        if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
+          report 0 "error" || true
+          exit 1
+        fi
+        report 100 "done" "$TOTAL_SIZE" "GitHub" || true
+        if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$PROGRESS_MSG_ID" || true
+          if [ -n "$MSG_ID" ] && [ "$MSG_ID" != "null" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$MSG_ID" || true
+          fi
+        fi
