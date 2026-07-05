@@ -201,9 +201,9 @@ jobs:
           report "$PROG" "uploading" "$TOTAL_SIZE" "GitHub" || true
 
           if [ "$IS_ASSET" = "true" ]; then
-            CAPTION="🐙 ${OWNER}/${REPO}\n📄 ${f} · ${SIZE_HR}"
+            CAPTION="🐙 ${f} · ${SIZE_HR}"
           else
-            CAPTION="🐙 ${OWNER}/${REPO}\n📄 ${f} · ${SIZE_HR}"
+            CAPTION="🐙 ${f} · ${SIZE_HR}"
           fi
 
           echo "Sending: $f ($SIZE_HR) [$PROG%]"
