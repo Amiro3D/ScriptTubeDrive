@@ -107,35 +107,25 @@ jobs:
           fi
         else
           echo "Downloading source for ${OWNER}/${REPO}..."
-          DEFAULT_BRANCH=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${OWNER}/${REPO}" 2>/dev/null \
-            | grep -o '"default_branch":"[^"]*"' | cut -d'"' -f4)
-          DEFAULT_BRANCH=${DEFAULT_BRANCH:-main}
-          echo "Default branch: $DEFAULT_BRANCH"
 
-          ZIPURL="https://codeload.github.com/${OWNER}/${REPO}/zip/refs/heads/${DEFAULT_BRANCH}"
-          echo "Downloading from: $ZIPURL"
-          curl -sL "$ZIPURL" -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip"
+          echo "Using GitHub API zipball endpoint..."
+          curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/zipball" \
+            -o "/tmp/gh_download/${REPO}.zip"
 
-          FSIZE=$(stat -c%s "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null || echo 0)
+          FSIZE=$(stat -c%s "/tmp/gh_download/${REPO}.zip" 2>/dev/null || echo 0)
           echo "Downloaded zip: $FSIZE bytes"
 
           if [ "$FSIZE" -lt 1000 ]; then
-            echo "Zip too small, trying alternate URL..."
-            rm -f "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip"
-            curl -sL "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${DEFAULT_BRANCH}.zip" \
-              -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip"
-            FSIZE2=$(stat -c%s "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null || echo 0)
-            echo "Alternate download: $FSIZE2 bytes"
-          fi
-
-          if [ "$FSIZE" -lt 1000 ] && [ "${FSIZE2:-0}" -lt 1000 ]; then
-            echo "Both failed, trying tarball..."
-            rm -f /tmp/gh_download/*
-            curl -sL "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${DEFAULT_BRANCH}.tar.gz" \
-              -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.tar.gz"
-            FSIZE3=$(stat -c%s "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.tar.gz" 2>/dev/null || echo 0)
-            echo "Tarball download: $FSIZE3 bytes"
+            echo "Zip too small, trying tarball..."
+            rm -f "/tmp/gh_download/${REPO}.zip"
+            curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${OWNER}/${REPO}/tarball" \
+              -o "/tmp/gh_download/${REPO}.tar.gz"
+            FSIZE2=$(stat -c%s "/tmp/gh_download/${REPO}.tar.gz" 2>/dev/null || echo 0)
+            echo "Tarball download: $FSIZE2 bytes"
           fi
         fi
 
