@@ -109,15 +109,31 @@ jobs:
           fi
         else
           echo "Downloading source for ${OWNER}/${REPO}..."
-          for branch in main master; do
-            curl -sL "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${branch}.zip" \
-              -o "/tmp/gh_download/${REPO}-${branch}.zip" 2>/dev/null
-            if [ -s "/tmp/gh_download/${REPO}-${branch}.zip" ]; then
-              echo "Downloaded from ${branch} branch"
-              break
+          DEFAULT_BRANCH=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${OWNER}/${REPO}" 2>/dev/null \
+            | grep -o '"default_branch":"[^"]*"' | cut -d'"' -f4)
+          DEFAULT_BRANCH=${DEFAULT_BRANCH:-main}
+          echo "Default branch: $DEFAULT_BRANCH"
+
+          curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${DEFAULT_BRANCH}.zip" \
+            -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null
+
+          FSIZE=$(stat -c%s "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null || echo 0)
+          if [ "$FSIZE" -lt 1000 ]; then
+            echo "Zip too small ($FSIZE bytes), trying tarball..."
+            rm -f "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip"
+            curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${DEFAULT_BRANCH}.tar.gz" \
+              -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.tar.gz" 2>/dev/null
+            FSIZE2=$(stat -c%s "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.tar.gz" 2>/dev/null || echo 0)
+            if [ "$FSIZE2" -lt 1000 ]; then
+              echo "Tarball also too small ($FSIZE2 bytes), trying without auth..."
+              rm -f "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.tar.gz"
+              curl -sL "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${DEFAULT_BRANCH}.zip" \
+                -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null
             fi
-            rm -f "/tmp/gh_download/${REPO}-${branch}.zip"
-          done
+          fi
         fi
 
         cd /tmp/gh_download
