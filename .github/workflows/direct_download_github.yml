@@ -73,6 +73,8 @@ jobs:
 
     - name: Download from GitHub
       id: download
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         URL="${{ steps.inputs.outputs.url }}"
         IS_ASSET="${{ steps.inputs.outputs.is_asset }}"
@@ -115,24 +117,16 @@ jobs:
           DEFAULT_BRANCH=${DEFAULT_BRANCH:-main}
           echo "Default branch: $DEFAULT_BRANCH"
 
-          curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${DEFAULT_BRANCH}.zip" \
+          gh api "repos/${OWNER}/${REPO}/zipball/${DEFAULT_BRANCH}" \
             -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null
 
           FSIZE=$(stat -c%s "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null || echo 0)
+          echo "Downloaded zip: $FSIZE bytes"
           if [ "$FSIZE" -lt 1000 ]; then
-            echo "Zip too small ($FSIZE bytes), trying tarball..."
+            echo "Zip too small, trying tarball via gh api..."
             rm -f "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip"
-            curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${DEFAULT_BRANCH}.tar.gz" \
+            gh api "repos/${OWNER}/${REPO}/tarball/${DEFAULT_BRANCH}" \
               -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.tar.gz" 2>/dev/null
-            FSIZE2=$(stat -c%s "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.tar.gz" 2>/dev/null || echo 0)
-            if [ "$FSIZE2" -lt 1000 ]; then
-              echo "Tarball also too small ($FSIZE2 bytes), trying without auth..."
-              rm -f "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.tar.gz"
-              curl -sL "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${DEFAULT_BRANCH}.zip" \
-                -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null
-            fi
           fi
         fi
 
