@@ -23,7 +23,16 @@ jobs:
         GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
 
         IS_RELEASE=false
-        if echo "$URL" | grep -qE '/releases/tag/'; then
+        IS_ASSET=false
+        if echo "$URL" | grep -qE '/releases/download/'; then
+          IS_ASSET=true
+          IS_RELEASE=true
+          OWNER=$(echo "$URL" | cut -d/ -f4)
+          REPO=$(echo "$URL" | cut -d/ -f5)
+          TAG=$(echo "$URL" | grep -oP '/releases/download/\K[^/]+')
+          FILENAME=$(echo "$URL" | grep -oP '/releases/download/[^/]+/\K[^?]+')
+          DOWNLOAD_URL="$URL"
+        elif echo "$URL" | grep -qE '/releases/tag/'; then
           IS_RELEASE=true
           OWNER=$(echo "$URL" | cut -d/ -f4)
           REPO=$(echo "$URL" | cut -d/ -f5)
@@ -41,6 +50,7 @@ jobs:
         echo "owner=${OWNER}" >> $GITHUB_OUTPUT
         echo "repo=${REPO}" >> $GITHUB_OUTPUT
         echo "is_release=${IS_RELEASE}" >> $GITHUB_OUTPUT
+        echo "is_asset=${IS_ASSET}" >> $GITHUB_OUTPUT
         echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
         echo "filename=${FILENAME}" >> $GITHUB_OUTPUT
         echo "chat_id=${CHAT_ID}" >> $GITHUB_OUTPUT
@@ -75,6 +85,7 @@ jobs:
       run: |
         cd /tmp
         IS_RELEASE="${{ steps.inputs.outputs.is_release }}"
+        IS_ASSET="${{ steps.inputs.outputs.is_asset }}"
         OWNER="${{ steps.inputs.outputs.owner }}"
         REPO="${{ steps.inputs.outputs.repo }}"
         DOWNLOAD_URL="${{ steps.inputs.outputs.download_url }}"
@@ -82,7 +93,18 @@ jobs:
 
         echo "Downloading: $DOWNLOAD_URL"
 
-        if [ "$IS_RELEASE" = "true" ]; then
+        mkdir -p gh_download && cd gh_download
+
+        if [ "$IS_ASSET" = "true" ]; then
+          echo "Downloading single release asset..."
+          FINAL_EXT="${FILENAME##*.}"
+          curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "$DOWNLOAD_URL" -o "${FILENAME}" 2>/dev/null
+          if [ ! -f "${FILENAME}" ] || [ ! -s "${FILENAME}" ]; then
+            echo "Direct download failed, trying without auth..."
+            curl -L "$DOWNLOAD_URL" -o "${FILENAME}" 2>/dev/null
+          fi
+        elif [ "$IS_RELEASE" = "true" ]; then
           TAG="${{ steps.inputs.outputs.url }}" 
           TAG=$(echo "$TAG" | grep -oP '/releases/tag/\K[^?]+')
           echo "Release tag: $TAG"
