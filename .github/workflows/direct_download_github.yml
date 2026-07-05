@@ -145,7 +145,8 @@ jobs:
           local API_URL="$1"; shift
           local MAX_RETRIES=5
           for i in $(seq 1 $MAX_RETRIES); do
-            RESP=$(curl -s -X POST "$API_URL" "$@" 2>/dev/null) || RESP='{"ok":false}'
+            RESP=$(curl -s -X POST "$API_URL" "$@" 2>&1) || RESP='{"ok":false,"error":"curl_failed"}'
+            echo "  attempt $i: $RESP" >&2
             ERROR_CODE=$(echo "$RESP" | grep -o '"error_code":[0-9]*' | head -1 | cut -d: -f2)
             if [ "$ERROR_CODE" = "429" ]; then
               RETRY_AFTER=$(echo "$RESP" | grep -o '"retry_after":[0-9]*' | head -1 | cut -d: -f2)
@@ -170,9 +171,11 @@ jobs:
 
         for f in *; do
           [ -f "$f" ] || continue
-          echo "Sending file: $f"
+          echo "Sending file: $f ($(du -h "$f" | cut -f1))"
           RESP=$(send_with_retry "${API_URL}/sendDocument" -F chat_id="$CHAT_ID" -F document=@"$f") || true
+          echo "Response: $RESP"
           MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
+          echo "MID=$MID"
           if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
         done
 
