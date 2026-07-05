@@ -1,0 +1,7 @@
+name = "bitter-wind-2755"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "DOWNLOADS"
+id = "45d61bb040eb4aa9b86a1b9c1c5c8095"

@@ -107,12 +107,15 @@ jobs:
           fi
         else
           echo "Downloading source for ${OWNER}/${REPO}..."
+          report 20 "downloading" || true
 
           echo "Using GitHub API zipball endpoint..."
           curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${OWNER}/${REPO}/zipball" \
             -o "/tmp/gh_download/${REPO}.zip"
+
+          report 60 "downloading" || true
 
           FSIZE=$(stat -c%s "/tmp/gh_download/${REPO}.zip" 2>/dev/null || echo 0)
           echo "Downloaded zip: $FSIZE bytes"
