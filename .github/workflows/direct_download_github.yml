@@ -73,8 +73,6 @@ jobs:
 
     - name: Download from GitHub
       id: download
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         URL="${{ steps.inputs.outputs.url }}"
         IS_ASSET="${{ steps.inputs.outputs.is_asset }}"
@@ -87,11 +85,10 @@ jobs:
 
         if [ "$IS_ASSET" = "true" ]; then
           echo "Downloading single asset: $URL"
-          curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "$URL" \
-            -o "/tmp/gh_download/${FILENAME}" 2>/dev/null
+          curl -fSL "$URL" -o "/tmp/gh_download/${FILENAME}" 2>/dev/null || true
           if [ ! -s "/tmp/gh_download/${FILENAME}" ]; then
-            echo "With auth failed, trying without..."
-            curl -L "$URL" -o "/tmp/gh_download/${FILENAME}" 2>/dev/null
+            curl -fSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "$URL" \
+              -o "/tmp/gh_download/${FILENAME}" 2>/dev/null || true
           fi
         elif echo "$URL" | grep -qE '/releases/tag/'; then
           TAG=$(echo "$URL" | grep -oP '/releases/tag/\K[^?]+')
@@ -101,32 +98,34 @@ jobs:
           echo "$RELEASE_JSON" | grep -o '"browser_download_url":"[^"]*"' | cut -d'"' -f4 | while read -r asset_url; do
             FNAME=$(basename "$asset_url")
             echo "Downloading: $FNAME"
-            curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "$asset_url" \
-              -o "/tmp/gh_download/${FNAME}" 2>/dev/null || true
+            curl -fSL "$asset_url" -o "/tmp/gh_download/${FNAME}" 2>/dev/null || true
           done
           if [ -z "$(ls -A /tmp/gh_download)" ]; then
             echo "No assets, downloading source tarball..."
-            curl -L "https://github.com/${OWNER}/${REPO}/archive/refs/tags/${TAG}.tar.gz" \
-              -o "/tmp/gh_download/${FILENAME}.tar.gz" 2>/dev/null
+            curl -fSL "https://github.com/${OWNER}/${REPO}/archive/refs/tags/${TAG}.tar.gz" \
+              -o "/tmp/gh_download/${FILENAME}.tar.gz" 2>/dev/null || true
           fi
         else
           echo "Downloading source for ${OWNER}/${REPO}..."
-          DEFAULT_BRANCH=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${OWNER}/${REPO}" 2>/dev/null \
+          DEFAULT_BRANCH=$(curl -s "https://api.github.com/repos/${OWNER}/${REPO}" 2>/dev/null \
             | grep -o '"default_branch":"[^"]*"' | cut -d'"' -f4)
           DEFAULT_BRANCH=${DEFAULT_BRANCH:-main}
           echo "Default branch: $DEFAULT_BRANCH"
 
-          gh api "repos/${OWNER}/${REPO}/zipball/${DEFAULT_BRANCH}" \
-            -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null
+          ZIPURL="https://codeload.github.com/${OWNER}/${REPO}/zip/refs/heads/${DEFAULT_BRANCH}"
+          echo "Downloading from: $ZIPURL"
+          curl -fSL "$ZIPURL" -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null || true
 
           FSIZE=$(stat -c%s "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null || echo 0)
           echo "Downloaded zip: $FSIZE bytes"
+
           if [ "$FSIZE" -lt 1000 ]; then
-            echo "Zip too small, trying tarball via gh api..."
+            echo "Zip too small, trying alternate URL..."
             rm -f "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip"
-            gh api "repos/${OWNER}/${REPO}/tarball/${DEFAULT_BRANCH}" \
-              -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.tar.gz" 2>/dev/null
+            curl -fSL "https://github.com/${OWNER}/${REPO}/archive/refs/heads/${DEFAULT_BRANCH}.zip" \
+              -o "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null || true
+            FSIZE2=$(stat -c%s "/tmp/gh_download/${REPO}-${DEFAULT_BRANCH}.zip" 2>/dev/null || echo 0)
+            echo "Alternate download: $FSIZE2 bytes"
           fi
         fi
 
