@@ -144,7 +144,12 @@ jobs:
         CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
         PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
         GROUP_CHAT_ID: ${{ steps.inputs.outputs.group_chat_id }}
+        OWNER: ${{ steps.inputs.outputs.owner }}
+        REPO: ${{ steps.inputs.outputs.repo }}
+        FILENAME: ${{ steps.inputs.outputs.filename }}
+        IS_ASSET: ${{ steps.inputs.outputs.is_asset }}
         TOTAL_SIZE: ${{ steps.download.outputs.total_size }}
+        FILE_COUNT: ${{ steps.download.outputs.file_count }}
       run: |
         WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
         report() {
@@ -172,17 +177,41 @@ jobs:
           return 1
         }
 
-        report 95 "uploading" || true
-
         cd /tmp/gh_download
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
         MSG_ID=""
+        TOTAL_FILES=$(find . -maxdepth 1 -type f | wc -l)
+        SENT=0
 
         for f in *; do
           [ -f "$f" ] || continue
-          SIZE=$(du -sh "$f" 2>/dev/null | cut -f1)
-          echo "Sending: $f ($SIZE)"
-          RESP=$(send_with_retry "${API_URL}/sendDocument" -F chat_id="$CHAT_ID" -F document=@"$f") || true
+          SENT=$((SENT + 1))
+          FSIZE=$(stat -c%s "$f" 2>/dev/null || echo 0)
+          if [ "$FSIZE" -gt 1073741824 ]; then
+            SIZE_HR="$(echo "scale=1; $FSIZE/1073741824" | bc)GB"
+          elif [ "$FSIZE" -gt 1048576 ]; then
+            SIZE_HR="$(echo "scale=1; $FSIZE/1048576" | bc)MB"
+          elif [ "$FSIZE" -gt 1024 ]; then
+            SIZE_HR="$(echo "scale=1; $FSIZE/1024" | bc)KB"
+          else
+            SIZE_HR="${FSIZE}B"
+          fi
+
+          PROG=$((SENT * 100 / TOTAL_FILES))
+          report "$PROG" "uploading" "$TOTAL_SIZE" "GitHub" || true
+
+          if [ "$IS_ASSET" = "true" ]; then
+            CAPTION="🐙 ${OWNER}/${REPO}\n📄 ${f} · ${SIZE_HR}"
+          else
+            CAPTION="🐙 ${OWNER}/${REPO}\n📄 ${f} · ${SIZE_HR}"
+          fi
+
+          echo "Sending: $f ($SIZE_HR) [$PROG%]"
+          RESP=$(send_with_retry "${API_URL}/sendDocument" \
+            -F chat_id="$CHAT_ID" \
+            -F document=@"$f" \
+            -F caption="$CAPTION" \
+            -F parse_mode="HTML") || true
           MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
           if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
         done
