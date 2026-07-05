@@ -58,6 +58,18 @@ jobs:
         }
         report 10 "downloading"
 
+    - name: Run Telegram Bot API
+      run: |
+        docker run -d --name telegram-bot-api -p 8081:8081 \
+          -e TELEGRAM_API_ID=32919068 \
+          -e TELEGRAM_API_HASH="${{ secrets.TELEGRAM_API_HASH }}" \
+          -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+          aiogram/telegram-bot-api:latest
+        for i in {1..20}; do
+          curl -s http://localhost:8081/ping > /dev/null 2>&1 && break
+          sleep 2
+        done
+
     - name: Download from GitHub
       id: download
       run: |
