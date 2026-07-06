@@ -25,7 +25,6 @@ jobs:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
       run: |
-        set -e
         WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
         report() {
           if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
@@ -45,7 +44,7 @@ jobs:
 
         # --- Download tools + cookies ---
         curl -sL "https://github.com/${{ github.repository }}/releases/download/tools-v1/tools.tar.gz" | sudo tar xz -C /usr/local/bin
-        curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/cookies.txt" -o cookies.txt
+        curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/cookies.txt" -o /tmp/cookies.txt
 
         # --- Start Telegram Bot API (pull+start in parallel with tool download above) ---
         docker run -d --name telegram-bot-api -p 8081:8081 \
@@ -90,7 +89,7 @@ jobs:
         yt-dlp $F \
           --merge-output-format mp4 \
           --write-thumbnail --convert-thumbnails jpg \
-          --cookies cookies.txt \
+          --cookies /tmp/cookies.txt \
           --js-runtimes deno \
           -o "video.%(ext)s" "$URL"
 
