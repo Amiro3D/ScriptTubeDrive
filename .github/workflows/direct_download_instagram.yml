@@ -12,193 +12,126 @@ on:
 jobs:
   download-and-send:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Download pre-built tools
+    - name: Setup & download
+      env:
+        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       run: |
-        echo "Downloading tools tarball..."
-        curl -sL "https://github.com/${{ github.repository }}/releases/download/tools-v1/tools.tar.gz" | sudo tar xz -C /usr/local/bin
-        echo "ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
-        echo "yt-dlp: $(yt-dlp --version)"
-        echo "deno: $(deno --version | head -1)"
-        echo "jq: $(jq --version)"
+        set -e
+        WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
+        report() {
+          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
+            curl -s -X POST "$WORKER_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
+          fi
+        }
 
-    - name: Run Telegram Bot API
-      run: |
-        docker run -d --name telegram-bot-api -p 8081:8081 \
-          -e TELEGRAM_API_ID=32919068 \
-          -e TELEGRAM_API_HASH="${{ secrets.TELEGRAM_API_HASH }}" \
-          -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
-          aiogram/telegram-bot-api:latest
-        for i in {1..20}; do
-          curl -s http://localhost:8081/ping > /dev/null 2>&1 && break
-          sleep 2
-        done
-
-    - name: Resolve inputs
-      id: inputs
-      run: |
         URL="${{ github.event.client_payload.url || inputs.url }}"
         CHAT_ID="${{ github.event.client_payload.chat_id || '102332059' }}"
         PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
         GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
-        echo "url=${URL}" >> $GITHUB_OUTPUT
-        echo "chat_id=${CHAT_ID}" >> $GITHUB_OUTPUT
-        echo "progress_msg_id=${PROGRESS_MSG_ID}" >> $GITHUB_OUTPUT
-        echo "group_chat_id=${GROUP_CHAT_ID}" >> $GITHUB_OUTPUT
 
-    - name: Report progress
-      run: |
-        report() {
-          if [ -n "${{ steps.inputs.outputs.chat_id }}" ] && [ -n "${{ steps.inputs.outputs.progress_msg_id }}" ]; then
-            curl -s -X POST "https://bitter-wind-2755.ame315898036.workers.dev/progress" \
-              -H "Content-Type: application/json" \
-              -d "{\"chat_id\":\"${{ steps.inputs.outputs.chat_id }}\",\"message_id\":\"${{ steps.inputs.outputs.progress_msg_id }}\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
-          fi
-        }
+        # Download tools + cookies in parallel (no Docker, no checkout)
+        curl -sL "https://github.com/${{ github.repository }}/releases/download/tools-v1/tools.tar.gz" | sudo tar xz -C /usr/local/bin &
+        curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/instagram_cookies.txt" -o /tmp/ig_cookies.txt &
+        pip3 install --break-system-packages gallery-dl 2>/dev/null &
+        wait
+
         report 10 "downloading"
 
-    - name: Download Instagram
-      id: download
-      env:
-        CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
-        PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
-      run: |
-        WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
-        report() {
-          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
-            curl -s -X POST "$WORKER_URL" \
-              -H "Content-Type: application/json" \
-              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
-          fi
-        }
-        URL="${{ steps.inputs.outputs.url }}"
-        mkdir -p /tmp/ig_download && cd /tmp/ig_download
-        report 20 "downloading"
-        COOKIES_FILE=""
-        if [ -f "$GITHUB_WORKSPACE/instagram_cookies.txt" ]; then
-          COOKIES_FILE="$GITHUB_WORKSPACE/instagram_cookies.txt"
-        fi
-        yt-dlp --write-thumbnail --convert-thumbnails jpg -o "ig_%(id)s.%(ext)s" --no-overwrites --ignore-errors ${COOKIES_FILE:+--cookies "$COOKIES_FILE"} "$URL" 2>&1 || true
-        FILE_COUNT=0
+        # Download Instagram content
+        mkdir -p /tmp/ig && cd /tmp/ig
+        yt-dlp --write-thumbnail --convert-thumbnails jpg \
+          -o "ig_%(id)s.%(ext)s" --no-overwrites --ignore-errors \
+          --cookies /tmp/ig_cookies.txt "$URL" 2>&1 || true
+
+        # Check if yt-dlp got any media files
+        MEDIA_COUNT=0
         for f in *; do
-          if [ -f "$f" ] && [[ ! "$f" == *.jpg ]] && [[ ! "$f" == *.png ]]; then
-            FILE_COUNT=$((FILE_COUNT + 1))
-          fi
+          [ -f "$f" ] && [[ ! "$f" == *.jpg ]] && [[ ! "$f" == *.png ]] && MEDIA_COUNT=$((MEDIA_COUNT + 1))
         done
-        if [ "$FILE_COUNT" -eq 0 ]; then
-          pip install -q gallery-dl 2>/dev/null || true
-          if [ -n "$COOKIES_FILE" ]; then
-            gallery-dl --cookies "$COOKIES_FILE" -d /tmp/ig_download "$URL" 2>&1 || true
-          else
-            gallery-dl -d /tmp/ig_download "$URL" 2>&1 || true
-          fi
-          find /tmp/ig_download -mindepth 2 -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.mp4" -o -name "*.webm" \) -exec mv {} /tmp/ig_download/ \; 2>/dev/null || true
-          find /tmp/ig_download -mindepth 3 -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.mp4" -o -name "*.webm" \) -exec mv {} /tmp/ig_download/ \; 2>/dev/null || true
-          find /tmp/ig_download -mindepth 1 -type d -empty -delete 2>/dev/null || true
-          echo "Files after gallery-dl:"
-          ls -la /tmp/ig_download/ || true
-          FILE_COUNT=0
-          for f in *; do [ -f "$f" ] && FILE_COUNT=$((FILE_COUNT + 1)); done
+
+        # Fallback to gallery-dl for image-only posts
+        if [ "$MEDIA_COUNT" -eq 0 ]; then
+          gallery-dl --cookies /tmp/ig_cookies.txt -d /tmp/ig "$URL" 2>&1 || true
+          # Flatten nested dirs
+          find /tmp/ig -mindepth 2 -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.mp4" -o -name "*.webm" \) -exec mv {} /tmp/ig/ \; 2>/dev/null || true
+          find /tmp/ig -mindepth 3 -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.mp4" -o -name "*.webm" \) -exec mv {} /tmp/ig/ \; 2>/dev/null || true
         fi
+
         report 70 "downloading"
-        THUMB=""
-        for f in *.jpg *.png; do [ -f "$f" ] && THUMB="$f" && break; done
-        TOTAL_SIZE=$(du -sh /tmp/ig_download 2>/dev/null | cut -f1 | sed 's/M$/MB/' | sed 's/G$/GB/')
-        echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
-        echo "thumb=${THUMB}" >> $GITHUB_OUTPUT
-        echo "total_size=${TOTAL_SIZE}" >> $GITHUB_OUTPUT
-        report 90 "downloading"
 
-    - name: Send to Telegram
-      env:
-        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
-        PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
-        GROUP_CHAT_ID: ${{ steps.inputs.outputs.group_chat_id }}
-        FILE_COUNT: ${{ steps.download.outputs.file_count }}
-        TOTAL_SIZE: ${{ steps.download.outputs.total_size }}
-      run: |
-        WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
-        report() {
-          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
-            curl -s -X POST "$WORKER_URL" \
-              -H "Content-Type: application/json" \
-              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
-          fi
-        }
-        send_with_retry() {
-          local API_URL="$1"; shift
-          local MAX_RETRIES=5
-          for i in $(seq 1 $MAX_RETRIES); do
-            RESP=$(curl -s -X POST "$API_URL" "$@")
-            ERROR_CODE=$(echo "$RESP" | grep -o '"error_code":[0-9]*' | head -1 | cut -d: -f2)
-            if [ "$ERROR_CODE" = "429" ]; then
-              RETRY_AFTER=$(echo "$RESP" | grep -o '"retry_after":[0-9]*' | head -1 | cut -d: -f2)
-              RETRY_AFTER=${RETRY_AFTER:-60}
-              echo "Rate limited. Waiting ${RETRY_AFTER}s (attempt $i/$MAX_RETRIES)"
-              sleep $((RETRY_AFTER + 2))
-              continue
-            fi
-            echo "$RESP"
-            return 0
-          done
-          echo '{"ok":false}'
-          return 1
-        }
-
-        report 95 "uploading" || true
-        cd /tmp/ig_download
-        API_URL="http://localhost:8081/bot${BOT_TOKEN}"
+        # --- Send to Telegram (standard API, no Docker) ---
+        API="https://api.telegram.org/bot${BOT_TOKEN}"
         MSG_ID=""
         HAS_VIDEO=false
 
+        # Send videos one by one
         for f in *.mp4 *.webm *.mkv; do
           [ -f "$f" ] || continue
           HAS_VIDEO=true
-          echo "Sending video: $f"
-          RESP=$(send_with_retry "${API_URL}/sendVideo" -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
-          MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
-          if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
+          for i in 1 2 3 4 5; do
+            RESP=$(curl -s -X POST "${API}/sendVideo" \
+              -F chat_id="$CHAT_ID" -F video=@"$f" -F supports_streaming=true)
+            MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
+            if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; break; fi
+            ERROR_CODE=$(echo "$RESP" | grep -o '"error_code":[0-9]*' | head -1 | cut -d: -f2)
+            if [ "$ERROR_CODE" = "429" ]; then
+              RETRY=$(echo "$RESP" | grep -o '"retry_after":[0-9]*' | head -1 | cut -d: -f2)
+              sleep $((RETRY + 2))
+            else
+              echo "ERROR: $RESP"; report 0 "error"; exit 1
+            fi
+          done
         done
 
+        # Send photos as album (all at once, not one by one)
         if [ "$HAS_VIDEO" = false ]; then
           PHOTOS=()
-          for f in *.jpg *.png; do
-            [ -f "$f" ] || continue
-            PHOTOS+=("$f")
-          done
+          for f in *.jpg *.png; do [ -f "$f" ] && PHOTOS+=("$f"); done
 
           if [ ${#PHOTOS[@]} -gt 0 ]; then
+            # Build album JSON
             MEDIA="["
             for i in "${!PHOTOS[@]}"; do
-              if [ $i -gt 0 ]; then MEDIA="$MEDIA,"; fi
+              [ $i -gt 0 ] && MEDIA="$MEDIA,"
               MEDIA="$MEDIA{\"type\":\"photo\",\"media\":\"attach://p$i\"}"
             done
             MEDIA="$MEDIA]"
+
+            # Send all photos in one API call
             CURL_ARGS=(-F chat_id="$CHAT_ID" -F "media=$MEDIA")
             for i in "${!PHOTOS[@]}"; do
               CURL_ARGS+=(-F "p$i=@${PHOTOS[$i]}")
             done
-            echo "Sending ${#PHOTOS[@]} photos as album..."
-            RESP=$(send_with_retry "${API_URL}/sendMediaGroup" "${CURL_ARGS[@]}")
-            MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
-            if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; fi
+            for i in 1 2 3 4 5; do
+              RESP=$(curl -s -X POST "${API}/sendMediaGroup" "${CURL_ARGS[@]}")
+              MID=$(echo "$RESP" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
+              if [ -n "$MID" ] && [ "$MID" != "0" ]; then MSG_ID="$MID"; break; fi
+              ERROR_CODE=$(echo "$RESP" | grep -o '"error_code":[0-9]*' | head -1 | cut -d: -f2)
+              if [ "$ERROR_CODE" = "429" ]; then
+                RETRY=$(echo "$RESP" | grep -o '"retry_after":[0-9]*' | head -1 | cut -d: -f2)
+                sleep $((RETRY + 2))
+              else
+                echo "ERROR: $RESP"; report 0 "error"; exit 1
+              fi
+            done
           fi
         fi
 
-        echo "Final MSG_ID=$MSG_ID"
-        if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
-          report 0 "error" || true
-          exit 1
-        fi
-        report 100 "done" "$TOTAL_SIZE" "Instagram" || true
+        [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ] || [ "$MSG_ID" = "0" ] && { report 0 "error"; exit 1; }
+
+        TOTAL_SIZE=$(du -sh /tmp/ig | cut -f1 | sed 's/M$/MB/' | sed 's/G$/GB/')
+        report 100 "done" "$TOTAL_SIZE" "Instagram"
+
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
-          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$PROGRESS_MSG_ID" || true
-          if [ -n "$MSG_ID" ] && [ "$MSG_ID" != "null" ]; then
-            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$MSG_ID" || true
-          fi
+          curl -s -X POST "${API}/forwardMessage" \
+            -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$PROGRESS_MSG_ID" &
+          curl -s -X POST "${API}/forwardMessage" \
+            -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$MSG_ID" &
         fi
+
+        echo "Done! Message ID: $MSG_ID"
