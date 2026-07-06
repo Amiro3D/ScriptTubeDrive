@@ -19,7 +19,6 @@ jobs:
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       run: |
-        set -e
         WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
         report() {
           if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
@@ -34,11 +33,11 @@ jobs:
         PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
         GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
 
-        # Download tools + cookies in parallel (no Docker, no checkout)
+        # Download tools + cookies in parallel
         curl -sL "https://github.com/${{ github.repository }}/releases/download/tools-v1/tools.tar.gz" | sudo tar xz -C /usr/local/bin &
         curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/instagram_cookies.txt" -o /tmp/ig_cookies.txt &
-        pip3 install --break-system-packages gallery-dl 2>/dev/null &
-        wait
+        pip3 install --break-system-packages gallery-dl > /dev/null 2>&1 &
+        wait || true
 
         report 10 "downloading"
 
@@ -51,13 +50,14 @@ jobs:
         # Check if yt-dlp got any media files
         MEDIA_COUNT=0
         for f in *; do
-          [ -f "$f" ] && [[ ! "$f" == *.jpg ]] && [[ ! "$f" == *.png ]] && MEDIA_COUNT=$((MEDIA_COUNT + 1))
+          if [ -f "$f" ] && [[ ! "$f" == *.jpg ]] && [[ ! "$f" == *.png ]]; then
+            MEDIA_COUNT=$((MEDIA_COUNT + 1))
+          fi
         done
 
         # Fallback to gallery-dl for image-only posts
         if [ "$MEDIA_COUNT" -eq 0 ]; then
           gallery-dl --cookies /tmp/ig_cookies.txt -d /tmp/ig "$URL" 2>&1 || true
-          # Flatten nested dirs
           find /tmp/ig -mindepth 2 -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.mp4" -o -name "*.webm" \) -exec mv {} /tmp/ig/ \; 2>/dev/null || true
           find /tmp/ig -mindepth 3 -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.mp4" -o -name "*.webm" \) -exec mv {} /tmp/ig/ \; 2>/dev/null || true
         fi
@@ -88,13 +88,12 @@ jobs:
           done
         done
 
-        # Send photos as album (all at once, not one by one)
+        # Send photos as album (all at once)
         if [ "$HAS_VIDEO" = false ]; then
           PHOTOS=()
           for f in *.jpg *.png; do [ -f "$f" ] && PHOTOS+=("$f"); done
 
           if [ ${#PHOTOS[@]} -gt 0 ]; then
-            # Build album JSON
             MEDIA="["
             for i in "${!PHOTOS[@]}"; do
               [ $i -gt 0 ] && MEDIA="$MEDIA,"
@@ -102,7 +101,6 @@ jobs:
             done
             MEDIA="$MEDIA]"
 
-            # Send all photos in one API call
             CURL_ARGS=(-F chat_id="$CHAT_ID" -F "media=$MEDIA")
             for i in "${!PHOTOS[@]}"; do
               CURL_ARGS+=(-F "p$i=@${PHOTOS[$i]}")
@@ -122,7 +120,11 @@ jobs:
           fi
         fi
 
-        [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ] || [ "$MSG_ID" = "0" ] && { report 0 "error"; exit 1; }
+        if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ] || [ "$MSG_ID" = "0" ]; then
+          echo "ERROR: No media downloaded"
+          report 0 "error"
+          exit 1
+        fi
 
         TOTAL_SIZE=$(du -sh /tmp/ig | cut -f1 | sed 's/M$/MB/' | sed 's/G$/GB/')
         report 100 "done" "$TOTAL_SIZE" "Instagram"
