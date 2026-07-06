@@ -34,8 +34,12 @@ jobs:
         PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
         GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
 
-        # Download tools (only yt-dlp + deno needed, no Docker)
-        curl -sL "https://github.com/${{ github.repository }}/releases/download/tools-v1/tools.tar.gz" | sudo tar xz -C /usr/local/bin
+        # Download only yt-dlp + deno in parallel (no tarball, no ffmpeg, no jq)
+        curl -sL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o /usr/local/bin/yt-dlp &
+        curl -fsSL https://deno.land/install.sh | sh &
+        wait
+        chmod +x /usr/local/bin/yt-dlp
+        cp ~/.deno/bin/deno /usr/local/bin/deno
 
         report 10 "downloading"
 
@@ -65,7 +69,7 @@ jobs:
 
         report 90 "uploading"
 
-        # Send via standard Telegram Bot API (no Docker needed, files up to 50MB)
+        # Send via standard Telegram Bot API (no Docker, files up to 50MB)
         API="https://api.telegram.org/bot${BOT_TOKEN}"
         TOTAL_SIZE=$(du -sh "$VIDEO" | cut -f1 | sed 's/M$/MB/' | sed 's/G$/GB/')
 

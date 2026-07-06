@@ -45,10 +45,15 @@ jobs:
         /tmp/tools/deno --version
         /tmp/tools/jq --version
 
-        echo "=== Creating tarball ==="
+        echo "=== Creating full tarball ==="
         cd /tmp/tools
         tar czf /tmp/tools.tar.gz *
         ls -lh /tmp/tools.tar.gz
+
+        echo "=== Creating light tarball (yt-dlp + deno only) ==="
+        cd /tmp/tools
+        tar czf /tmp/tools-light.tar.gz yt-dlp deno
+        ls -lh /tmp/tools-light.tar.gz
 
     - name: Upload to release
       uses: softprops/action-gh-release@v2
@@ -57,8 +62,11 @@ jobs:
         name: Pre-built Tools
         body: |
           Pre-built tools for faster workflow execution.
-          Contains: ffmpeg, ffprobe, yt-dlp, deno, jq
-        files: /tmp/tools.tar.gz
+          - tools.tar.gz: ffmpeg, ffprobe, yt-dlp, deno, jq
+          - tools-light.tar.gz: yt-dlp, deno only (faster)
+        files: |
+          /tmp/tools.tar.gz
+          /tmp/tools-light.tar.gz
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
