@@ -43,10 +43,9 @@ jobs:
 
         report 10 "downloading"
 
-        # Download TikTok video
+        # Download TikTok video (no thumbnail - saves time + no ffmpeg needed)
         mkdir -p /tmp/tt && cd /tmp/tt
         yt-dlp \
-          --write-thumbnail --convert-thumbnails jpg \
           -o "video.%(ext)s" \
           --no-overwrites --ignore-errors \
           --js-runtimes deno \
