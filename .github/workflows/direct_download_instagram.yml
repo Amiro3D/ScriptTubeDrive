@@ -33,11 +33,13 @@ jobs:
         PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
         GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
 
-        # Download tools + cookies in parallel
-        curl -sL "https://github.com/${{ github.repository }}/releases/download/tools-v1/tools.tar.gz" | sudo tar xz -C /usr/local/bin &
+        # Download tools + cookies in parallel (no Docker, no tarball)
+        curl -sL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp &
+        curl -sL "https://github.com/denoland/deno/releases/latest/download/deno-linux-x64.zip" -o /tmp/deno.zip &
         curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/instagram_cookies.txt" -o /tmp/ig_cookies.txt &
         pip3 install --break-system-packages gallery-dl > /dev/null 2>&1 &
         wait || true
+        cd /tmp && unzip -qo /tmp/deno.zip && sudo mv deno /usr/local/bin/deno && rm -f /tmp/deno.zip
 
         report 10 "downloading"
 
