@@ -16,96 +16,16 @@ on:
 jobs:
   download-and-send:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
-    - name: Checkout (for cookies.txt)
-      uses: actions/checkout@v4
-
-    # ---------- Download pre-built tools (fast) ----------
-    - name: Download pre-built tools
-      run: |
-        echo "Downloading tools tarball..."
-        curl -sL "https://github.com/${{ github.repository }}/releases/download/tools-v1/tools.tar.gz" | sudo tar xz -C /usr/local/bin
-        echo "ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
-        echo "yt-dlp: $(yt-dlp --version)"
-        echo "deno: $(deno --version | head -1)"
-        echo "jq: $(jq --version)"
-
-    # ---------- Run Telegram Bot API via Docker ----------
-    - name: Run Telegram Bot API via Docker
-      run: |
-        docker run -d \
-          --name telegram-bot-api \
-          -p 8081:8081 \
-          -e TELEGRAM_API_ID=32919068 \
-          -e TELEGRAM_API_HASH="${{ secrets.TELEGRAM_API_HASH }}" \
-          -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
-          aiogram/telegram-bot-api:latest
-        for i in {1..20}; do
-          if curl -s http://localhost:8081/ping > /dev/null 2>&1; then
-            echo "Telegram Bot API started."
-            break
-          fi
-          echo "Waiting... ($i)"
-          sleep 2
-        done
-        if ! curl -s http://localhost:8081/ping > /dev/null 2>&1; then
-          echo "ERROR: Failed to start Telegram Bot API via Docker."
-          docker logs telegram-bot-api
-          exit 1
-        fi
-
-    # ---------- Resolve inputs ----------
-    - name: Resolve inputs
-      id: inputs
-      run: |
-        URL="${{ github.event.client_payload.url || inputs.url }}"
-        QUALITY="${{ github.event.client_payload.quality || inputs.quality || '720' }}"
-        CHAT_ID="${{ github.event.client_payload.chat_id || '102332059' }}"
-        PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
-        THUMB_MSG_ID="${{ github.event.client_payload.thumbnail_msg_id || '' }}"
-        GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
-        echo "url=${URL}" >> $GITHUB_OUTPUT
-        echo "quality=${QUALITY}" >> $GITHUB_OUTPUT
-        echo "chat_id=${CHAT_ID}" >> $GITHUB_OUTPUT
-        echo "progress_msg_id=${PROGRESS_MSG_ID}" >> $GITHUB_OUTPUT
-        echo "thumb_msg_id=${THUMB_MSG_ID}" >> $GITHUB_OUTPUT
-        echo "group_chat_id=${GROUP_CHAT_ID}" >> $GITHUB_OUTPUT
-
-    # ---------- Report progress helper ----------
-    - name: Report progress
-      id: progress
-      run: |
-        report_progress() {
-          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
-            curl -s -X POST "https://bitter-wind-2755.ame315898036.workers.dev/progress" \
-              -H "Content-Type: application/json" \
-              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
-          fi
-        }
-        echo "CHAT_ID=${{ steps.inputs.outputs.chat_id }}" >> $GITHUB_OUTPUT
-        echo "PROGRESS_MSG_ID=${{ steps.inputs.outputs.progress_msg_id }}" >> $GITHUB_OUTPUT
-        # Test connectivity
-        report_progress 0 "downloading"
-
-    # ---------- Get video title ----------
-    - name: Get video title
-      id: title
-      run: |
-        URL="${{ steps.inputs.outputs.url }}"
-        RAW_TITLE=$(yt-dlp --get-title "$URL" --cookies cookies.txt --js-runtimes deno 2>/dev/null || echo "YouTube_Video")
-        SAFE_TITLE=$(echo "$RAW_TITLE" | sed 's/[^a-zA-Z0-9\-]/_/g' | sed 's/__*/_/g' | cut -c1-100)
-        echo "raw_title=${RAW_TITLE}" >> $GITHUB_OUTPUT
-        echo "safe_title=${SAFE_TITLE}" >> $GITHUB_OUTPUT
-
-    # ---------- Download and optimize video ----------
-    - name: Download and optimize video
-      id: download
+    - name: Setup & download
+      id: dl
       env:
-        CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
-        PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
+        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
       run: |
+        set -e
         WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
         report() {
           if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
@@ -115,11 +35,44 @@ jobs:
           fi
         }
 
-        URL="${{ steps.inputs.outputs.url }}"
-        QUALITY="${{ steps.inputs.outputs.quality }}"
-        SAFE_TITLE="${{ steps.title.outputs.safe_title }}"
+        # --- Resolve inputs ---
+        URL="${{ github.event.client_payload.url || inputs.url }}"
+        QUALITY="${{ github.event.client_payload.quality || inputs.quality || '720' }}"
+        CHAT_ID="${{ github.event.client_payload.chat_id || '102332059' }}"
+        PROGRESS_MSG_ID="${{ github.event.client_payload.progress_msg_id || '' }}"
+        THUMB_MSG_ID="${{ github.event.client_payload.thumbnail_msg_id || '' }}"
+        GROUP_CHAT_ID="${{ github.event.client_payload.group_chat_id || '' }}"
+
+        # --- Download tools + cookies ---
+        curl -sL "https://github.com/${{ github.repository }}/releases/download/tools-v1/tools.tar.gz" | sudo tar xz -C /usr/local/bin
+        curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/cookies.txt" -o cookies.txt
+
+        # --- Start Telegram Bot API (pull+start in parallel with tool download above) ---
+        docker run -d --name telegram-bot-api -p 8081:8081 \
+          -e TELEGRAM_API_ID=32919068 \
+          -e TELEGRAM_API_HASH="$TELEGRAM_API_HASH" \
+          -e TELEGRAM_BOT_TOKEN="$BOT_TOKEN" \
+          aiogram/telegram-bot-api:latest &
+        DOCKER_PID=$!
+
+        # Poll faster (0.5s intervals instead of 2s)
+        for i in $(seq 1 40); do
+          if curl -s http://localhost:8081/ping > /dev/null 2>&1; then
+            echo "Telegram Bot API ready."
+            break
+          fi
+          sleep 0.5
+        done
+        if ! curl -s http://localhost:8081/ping > /dev/null 2>&1; then
+          echo "ERROR: Telegram Bot API failed to start."
+          docker logs telegram-bot-api
+          exit 1
+        fi
 
         report 10 "downloading"
+
+        # --- Download video (title + video in one yt-dlp call) ---
+        mkdir -p /tmp/yt && cd /tmp/yt
 
         case "$QUALITY" in
           "144")  F="-f bestvideo[height<=144]+bestaudio/best[height<=144]" ;;
@@ -133,170 +86,77 @@ jobs:
           *)      F="-f bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
         esac
 
-        report 20 "downloading"
-
+        # Use output template to avoid needing separate title fetch
         yt-dlp $F \
           --merge-output-format mp4 \
           --write-thumbnail --convert-thumbnails jpg \
           --cookies cookies.txt \
           --js-runtimes deno \
-          -o "${SAFE_TITLE}.%(ext)s" "$URL"
+          -o "video.%(ext)s" "$URL"
 
         report 60 "downloading"
 
+        # --- Process output ---
         if [ "$QUALITY" = "audio" ]; then
-          EXT="mp3"
-          FINAL_NAME="${SAFE_TITLE}.${EXT}"
-          cp "${SAFE_TITLE}.${EXT}" "$FINAL_NAME"
+          FINAL_NAME="video.mp3"
           FILE_SIZE=$(du -h "$FINAL_NAME" | cut -f1 | sed 's/M$/MB/' | sed 's/G$/GB/')
-          echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
-          echo "file_size=${FILE_SIZE}" >> $GITHUB_OUTPUT
-          echo "duration=0" >> $GITHUB_OUTPUT
-          echo "width=0" >> $GITHUB_OUTPUT
-          echo "height=0" >> $GITHUB_OUTPUT
-          echo "thumb=" >> $GITHUB_OUTPUT
+          DURATION=0; WIDTH=0; HEIGHT=0; THUMB_FILE=""
         else
-          EXT="mp4"
-          INPUT="${SAFE_TITLE}.${EXT}"
-          report 70 "downloading"
-          ffmpeg -i "$INPUT" -c copy -movflags +faststart "${SAFE_TITLE}_stream.mp4"
-          FINAL_NAME="${SAFE_TITLE}_stream.${EXT}"
-
+          ffmpeg -i "video.mp4" -c copy -movflags +faststart "video_stream.mp4"
+          FINAL_NAME="video_stream.mp4"
           FILE_SIZE=$(du -h "$FINAL_NAME" | cut -f1)
-          report 90 "downloading"
-
-          # Extract metadata for Telegram
-          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${SAFE_TITLE}_stream.mp4" 2>/dev/null | cut -d. -f1)
-          WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=s=x:p=0 "${SAFE_TITLE}_stream.mp4" 2>/dev/null)
-          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "${SAFE_TITLE}_stream.mp4" 2>/dev/null)
-
-          # Find thumbnail
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$FINAL_NAME" 2>/dev/null | cut -d. -f1)
+          WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=s=x:p=0 "$FINAL_NAME" 2>/dev/null)
+          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "$FINAL_NAME" 2>/dev/null)
           THUMB_FILE=""
-          for f in "${SAFE_TITLE}.jpg" "${SAFE_TITLE}.webp" "${SAFE_TITLE}.thumb.jpg"; do
-            if [ -f "$f" ]; then
-              THUMB_FILE="$f"
-              break
-            fi
+          for f in video.jpg video.webp video.thumb.jpg; do
+            [ -f "$f" ] && THUMB_FILE="$f" && break
           done
-
-          echo "video_file=${FINAL_NAME}" >> $GITHUB_OUTPUT
-          echo "file_size=${FILE_SIZE}" >> $GITHUB_OUTPUT
-          echo "duration=${DURATION:-0}" >> $GITHUB_OUTPUT
-          echo "width=${WIDTH:-0}" >> $GITHUB_OUTPUT
-          echo "height=${HEIGHT:-0}" >> $GITHUB_OUTPUT
-          echo "thumb=${THUMB_FILE}" >> $GITHUB_OUTPUT
-
-          # Determine display quality from actual resolution
-          if [ "$QUALITY" = "best" ] && [ -n "$HEIGHT" ] && [ "$HEIGHT" != "0" ]; then
-            DISPLAY_QUALITY="${HEIGHT}p"
-          elif [ "$QUALITY" = "audio" ]; then
-            DISPLAY_QUALITY="audio"
-          else
-            DISPLAY_QUALITY="${QUALITY}p"
-          fi
-          echo "display_quality=${DISPLAY_QUALITY}" >> $GITHUB_OUTPUT
-          echo "Display quality: ${DISPLAY_QUALITY}"
-          echo "Metadata: duration=${DURATION:-0}s, ${WIDTH:-0}x${HEIGHT:-0}, size=${FILE_SIZE}"
         fi
 
-        report 95 "downloading"
+        report 90 "downloading"
 
-    # ---------- Send to Telegram (with retry on rate limit) ----------
-    - name: Send to Telegram
-      env:
-        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        CHAT_ID: ${{ steps.inputs.outputs.chat_id }}
-        PROGRESS_MSG_ID: ${{ steps.inputs.outputs.progress_msg_id }}
-        TITLE: ${{ steps.title.outputs.raw_title }}
-        GROUP_CHAT_ID: ${{ steps.inputs.outputs.group_chat_id }}
-        THUMB_MSG_ID: ${{ steps.inputs.outputs.thumb_msg_id }}
-        DURATION: ${{ steps.download.outputs.duration }}
-        WIDTH: ${{ steps.download.outputs.width }}
-        HEIGHT: ${{ steps.download.outputs.height }}
-        THUMB_FILE: ${{ steps.download.outputs.thumb }}
-        FILE_SIZE: ${{ steps.download.outputs.file_size }}
-        DISPLAY_QUALITY: ${{ steps.download.outputs.display_quality }}
-      run: |
-        WORKER_URL="https://bitter-wind-2755.ame315898036.workers.dev/progress"
-        report() {
-          if [ -n "$CHAT_ID" ] && [ -n "$PROGRESS_MSG_ID" ]; then
-            curl -s -X POST "$WORKER_URL" \
-              -H "Content-Type: application/json" \
-              -d "{\"chat_id\":\"$CHAT_ID\",\"message_id\":\"$PROGRESS_MSG_ID\",\"progress\":\"$1\",\"status\":\"$2\",\"file_size\":\"${3:-}\",\"quality\":\"${4:-}\"}" > /dev/null 2>&1 || true
-          fi
-        }
-
-        report 98 "uploading"
-
-        FILE="${{ steps.download.outputs.video_file }}"
-        EXT="${FILE##*.}"
+        # --- Send to Telegram ---
         API_URL="http://localhost:8081/bot${BOT_TOKEN}"
+        MSG_ID=""
 
-        echo "Sending file: $FILE (size=${FILE_SIZE}, duration=${DURATION}s, ${WIDTH}x${HEIGHT})"
-        MAX_RETRIES=3
-        for i in $(seq 1 $MAX_RETRIES); do
-          if [ "$EXT" = "mp4" ]; then
-            THUMB_ARGS=""
-            if [ -n "$THUMB_FILE" ] && [ -f "$THUMB_FILE" ]; then
-              THUMB_ARGS="-F thumb=@${THUMB_FILE}"
-            fi
-            RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
-              -F chat_id="$CHAT_ID" \
-              -F video=@"$FILE" \
-              $THUMB_ARGS \
-              -F duration="$DURATION" \
-              -F width="$WIDTH" \
-              -F height="$HEIGHT" \
-              -F supports_streaming=true \
-              -F caption="🎬 ${TITLE}")
-          else
+        for i in 1 2 3; do
+          if [ "$QUALITY" = "audio" ]; then
             RESP=$(curl -s -X POST "${API_URL}/sendDocument" \
-              -F chat_id="$CHAT_ID" \
-              -F document=@"$FILE" \
-              -F caption="🎵 ${TITLE}")
+              -F chat_id="$CHAT_ID" -F document=@"$FINAL_NAME" -F caption="🎵 ${URL}")
+          else
+            THUMB_ARGS=""
+            [ -n "$THUMB_FILE" ] && [ -f "$THUMB_FILE" ] && THUMB_ARGS="-F thumb=@${THUMB_FILE}"
+            RESP=$(curl -s -X POST "${API_URL}/sendVideo" \
+              -F chat_id="$CHAT_ID" -F video=@"$FINAL_NAME" $THUMB_ARGS \
+              -F duration="$DURATION" -F width="$WIDTH" -F height="$HEIGHT" \
+              -F supports_streaming=true -F caption="🎬 ${URL}")
           fi
           MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')
-          if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
-            ERROR=$(echo "$RESP" | jq -r '.description')
-            if echo "$ERROR" | grep -q "Too Many Requests"; then
-              RETRY_AFTER=$(echo "$RESP" | jq -r '.parameters.retry_after // 10')
-              if [ "$RETRY_AFTER" -le 60 ]; then
-                echo "Rate limited. Retry after $RETRY_AFTER seconds (attempt $i/$MAX_RETRIES)"
-                sleep $((RETRY_AFTER + 2))
-                continue
-              else
-                report 0 "error"
-                exit 1
-              fi
-            else
-              echo "ERROR: Failed to send file. Response: $RESP"
-              report 0 "error"
-              exit 1
-            fi
+          if [ -n "$MSG_ID" ] && [ "$MSG_ID" != "null" ]; then break; fi
+          ERROR=$(echo "$RESP" | jq -r '.description')
+          if echo "$ERROR" | grep -q "Too Many Requests"; then
+            RETRY_AFTER=$(echo "$RESP" | jq -r '.parameters.retry_after // 10')
+            sleep $((RETRY_AFTER + 2))
           else
-            echo "Sent file, message ID: $MSG_ID"
-            break
+            echo "ERROR: $RESP"
+            report 0 "error"
+            exit 1
           fi
         done
 
-        if [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ]; then
-          echo "ERROR: Failed to send file after $MAX_RETRIES attempts."
-          report 0 "error"
-          exit 1
-        fi
+        [ -z "$MSG_ID" ] || [ "$MSG_ID" = "null" ] && { report 0 "error"; exit 1; }
 
+        DISPLAY_QUALITY="${QUALITY}p"
+        [ "$QUALITY" = "best" ] && [ -n "$HEIGHT" ] && [ "$HEIGHT" != "0" ] && DISPLAY_QUALITY="${HEIGHT}p"
         report 100 "done" "$FILE_SIZE" "$DISPLAY_QUALITY"
 
-        # Forward thumbnail + video to group if provided
+        # Forward to group if provided
         if [ -n "$GROUP_CHAT_ID" ] && [ "$GROUP_CHAT_ID" != "null" ]; then
-          # Forward the thumbnail/status message
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
-            -d chat_id="$GROUP_CHAT_ID" \
-            -d from_chat_id="$CHAT_ID" \
-            -d message_id="$PROGRESS_MSG_ID"
-          # Forward the video
+            -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$PROGRESS_MSG_ID" &
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/forwardMessage" \
-            -d chat_id="$GROUP_CHAT_ID" \
-            -d from_chat_id="$CHAT_ID" \
-            -d message_id="$MSG_ID"
+            -d chat_id="$GROUP_CHAT_ID" -d from_chat_id="$CHAT_ID" -d message_id="$MSG_ID" &
         fi
+
+        echo "Done! Message ID: $MSG_ID"
