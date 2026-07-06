@@ -1,0 +1,64 @@
+name: Build Tools Tarball
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-tools-tarball.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Build tools tarball
+      run: |
+        mkdir -p /tmp/tools
+
+        echo "=== Downloading ffmpeg ==="
+        curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
+        cd /tmp && tar xf ffmpeg.tar.xz
+        cp /tmp/ffmpeg-*-amd64-static/ffmpeg /tmp/tools/ffmpeg
+        cp /tmp/ffmpeg-*-amd64-static/ffprobe /tmp/tools/ffprobe
+        chmod +x /tmp/tools/ffmpeg /tmp/tools/ffprobe
+        rm -rf /tmp/ffmpeg*
+
+        echo "=== Downloading yt-dlp ==="
+        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /tmp/tools/yt-dlp
+        chmod +x /tmp/tools/yt-dlp
+
+        echo "=== Downloading deno ==="
+        curl -fsSL https://deno.land/install.sh | sh
+        cp ~/.deno/bin/deno /tmp/tools/deno
+        chmod +x /tmp/tools/deno
+
+        echo "=== Installing jq ==="
+        sudo apt-get update && sudo apt-get install -y jq
+        cp $(which jq) /tmp/tools/jq
+
+        echo "=== Tools included ==="
+        ls -la /tmp/tools/
+        /tmp/tools/ffmpeg -version 2>&1 | head -1
+        /tmp/tools/yt-dlp --version
+        /tmp/tools/deno --version
+        /tmp/tools/jq --version
+
+        echo "=== Creating tarball ==="
+        cd /tmp/tools
+        tar czf /tmp/tools.tar.gz *
+        ls -lh /tmp/tools.tar.gz
+
+    - name: Upload to release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: tools-v1
+        name: Pre-built Tools
+        body: |
+          Pre-built tools for faster workflow execution.
+          Contains: ffmpeg, ffprobe, yt-dlp, deno, jq
+        files: /tmp/tools.tar.gz
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

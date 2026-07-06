@@ -17,42 +17,13 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Cache ffmpeg
-      uses: actions/cache@v4
-      with:
-        path: /usr/local/bin/ff*
-        key: ffmpeg-static-v2
-
-    - name: Cache yt-dlp
-      uses: actions/cache@v4
-      with:
-        path: /usr/local/bin/yt-dlp
-        key: ytdlp-standalone-v1
-
-    - name: Cache Deno
-      uses: actions/cache@v4
-      with:
-        path: ~/.deno
-        key: deno-linux-x64-v1
-
-    - name: Install tools
+    - name: Download pre-built tools
       run: |
-        if [ ! -f /usr/local/bin/ffmpeg ]; then
-          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
-          cd /tmp && tar xf ffmpeg.tar.xz
-          sudo cp /tmp/ffmpeg-*-amd64-static/ffmpeg /usr/local/bin/ffmpeg
-          sudo cp /tmp/ffmpeg-*-amd64-static/ffprobe /usr/local/bin/ffprobe
-          sudo chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
-          rm -rf /tmp/ffmpeg*
-        fi
-        if [ ! -f /usr/local/bin/yt-dlp ]; then
-          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-          sudo chmod +x /usr/local/bin/yt-dlp
-        fi
-        if [ ! -f "$HOME/.deno/bin/deno" ]; then
-          curl -fsSL https://deno.land/install.sh | sh
-        fi
-        echo "$HOME/.deno/bin" >> $GITHUB_PATH
+        echo "Downloading tools tarball..."
+        curl -sL "https://github.com/${{ github.repository }}/releases/download/tools-v1/tools.tar.gz" | sudo tar xz -C /usr/local/bin
+        echo "ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
+        echo "yt-dlp: $(yt-dlp --version)"
+        echo "deno: $(deno --version | head -1)"
 
     - name: Run Telegram Bot API
       run: |
